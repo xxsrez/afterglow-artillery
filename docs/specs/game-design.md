@@ -177,6 +177,13 @@ Classic, где default начинается с бесконечной Baby Miss
    подменять характеристики предмета с тем же идентификатором.
 6. Infinite Arsenal меняет только явную ammo/interround policy; mechanical
    outcome одного seeded shot совпадает с Quick Demo.
+7. Release 0.1 применяет неканоническую семейную шкалу radius из
+   [ADR 0004](../decisions/0004-quick-demo-effect-scale.md): `1.0–1.8×` к
+   прежним demo values. Center damage, falloff, payload count, price и bundle
+   size одновременно не меняются.
+8. Mechanical radius, сплошной readable boundary и безопасный decorative
+   spectacle envelope являются разными параметрами. Только первый участвует в
+   damage, terrain и collision.
 
 ### Принятый контракт Quick Demo
 
@@ -272,6 +279,7 @@ Desktop использует тот же layout с мышью, колесом и
   Infinite Arsenal showcase;
 - канонические price, bundle size, arms level и inventory cap;
 - детерминированные provisional mechanics для неизвестных формул;
+- явные mechanical/readable/spectacle profiles всех 33 weapons;
 - уникальные cues семейства, усиленная хореография Funky Bomb, звук, camera
   response и читаемый aftermath;
 - touch-, mouse- и keyboard-flow в одном интерфейсе.

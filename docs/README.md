@@ -21,10 +21,14 @@
    принятый renderer и граница симуляции/presentation.
 7. [Профили щитов Quick Demo](decisions/0003-provisional-shield-profiles.md) —
    явная граница source-backed ролей и неканонических параметров showcase.
-8. [Оригинальная игра](reference/original-game.md) — полный source-backed
+8. [Шкала поражения и spectacle](decisions/0004-quick-demo-effect-scale.md) —
+   измерения `current → proposed`, три envelope и performance budgets.
+9. [Оригинальная игра](reference/original-game.md) — полный source-backed
    каталог из 33 weapons, экономика и неизвестные параметры Scorched Earth 1.5.
-9. [Проверка shield showcase](verification/shield-showcase.md) —
+10. [Проверка shield showcase](verification/shield-showcase.md) —
    воспроизводимый seed, stimulus и обязательные реакции пяти семейств.
+11. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
+    representative small/medium/cluster/terrain/nuclear styleframes.
 
 ## Пути чтения
 

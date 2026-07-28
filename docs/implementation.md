@@ -67,7 +67,33 @@ Seed определяет число, позиции и порядок chain nod
 - Napalm использует расстояние до ближайшего flow point;
 - Sandhog endpoints обходят shield на `82%`, laser — на `100%`;
 - остальные profiles читают provisional `demoResolution.damage` и собственную
-  геометрию behavior.
+  геометрию behavior;
+- release 0.1 расширяет только spatial reach по семейной шкале `1.0–1.8×`;
+  center damage, falloff, payload count, цены и bundle sizes не меняются.
+
+## Effect envelopes
+
+`lib/game/effect-profiles.ts` перечисляет все 33 weapons и хранит измеренный
+baseline, новый mechanical radius/half-width, readable boundary, безопасный
+spectacle envelope, shape/signature, budgets particles/shockwaves и maximum
+aftermath. Таблица и баланс-решение находятся в
+[ADR 0004](decisions/0004-quick-demo-effect-scale.md).
+
+Прямая radial damage formula вынесена в чистый `resolveRadialDamage`; Canvas не
+получает decorative radius. Ballistic/roller/digger/sandhog/terrain circle и
+Plasma читают новые `demoResolution.radius`. Funky использует 24-unit node,
+Napalm — отдельный reach от flow point, Earthflow — flow half-width, Laser —
+17-unit collision half-width, global settle остаётся global.
+
+Canvas рисует mechanical boundary сплошной линией с ticks, а safe spectacle —
+пунктирными echo rings, rays, nuclear radial light и plume. Existing
+family-specific flow, wedge, beam, seismic и growth choreography сохраняет
+собственную геометрию. Full/Balanced/Reduced выбирают budgets `220/132/60`
+максимум на shot и до `4/2/1` echoes; общий particle cap равен `320`.
+Presentation seed отделён от mechanics seed.
+
+Representative local/production flow описан в
+[effect envelope verification](verification/effect-envelope-showcase.md).
 
 ## Shield showcase
 

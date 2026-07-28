@@ -18,6 +18,7 @@ import {
   createDemoInventory,
   generateTerrain,
   getShield,
+  getWeaponEffectProfile,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   nextPlayerIndex,
@@ -25,6 +26,7 @@ import {
   quoteWeaponPurchase,
   quoteWeaponSale,
   restoreAvailableSelectedWeapon,
+  resolveRadialDamage,
   resolveShieldDamage,
   resolveShieldDeflection,
   selectPlayerWeapon,
@@ -40,6 +42,7 @@ import {
   type Tank,
   type TrajectoryPoint,
   type Vector2,
+  type WeaponEffectProfile,
   type WeaponId,
 } from "@/lib/game";
 import {
@@ -74,6 +77,7 @@ import styles from "./ScorchedGame.module.css";
 const TOTAL_ROUNDS = 3;
 const MAX_TURNS_PER_ROUND = 12;
 const TANK_HALF_HEIGHT = 11;
+const MAX_ACTIVE_PARTICLES = 320;
 
 const PLAYER_COLORS = ["#d8ff45", "#ff6658"] as const;
 const PLAYER_NAMES = ["Пилот Лайм", "Пилот Коралл"] as const;
@@ -701,6 +705,7 @@ function buildShot(
   const weapon = catalogWeapon(weaponId);
   const behavior = DEMO_BEHAVIORS[weaponId];
   const resolution = weapon.demoResolution;
+  const effectProfile = getWeaponEffectProfile(weaponId);
   const shotSeed = model.seed + model.round * 1_003 + model.turn * 37;
   const random = new SeededRandom(`${shotSeed}:${weaponId}:mechanics`);
   const origin = projectileOrigin(tank);
@@ -958,8 +963,8 @@ function buildShot(
     });
     const halfWidth =
       behavior.kind === "napalm"
-        ? 70 + behavior.tier * 23
-        : 112;
+        ? Math.round(effectProfile.mechanicalRadius * 1.35)
+        : effectProfile.mechanicalRadius;
     flowPoints = buildFlowPoints(model.terrain, impact, halfWidth);
     impactPoints.push(impact);
     impactTimes.push(0.55);
@@ -1174,12 +1179,15 @@ function explosionDamage(
     if (proximity > reach) {
       continue;
     }
-    const falloff = 1 - proximity / reach;
     applyDamage(
       model,
       attackerIndex,
       tank,
-      peakDamage * (0.22 + falloff * 0.78),
+      resolveRadialDamage({
+        peakDamage,
+        mechanicalRadius: radius,
+        distance: proximity,
+      }),
       shieldBypass,
       kind,
       proximity <= TANK_HALF_HEIGHT + 5,
@@ -1346,6 +1354,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const resolution = weapon.demoResolution;
+  const effectProfile = getWeaponEffectProfile(shot.weaponId);
   let terrainChanged = false;
 
   if (shot.fizzled) {
@@ -1387,7 +1396,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "funky") {
-    const nodeRadius = Math.max(8, Math.min(16, resolution.radius));
+    const nodeRadius = effectProfile.mechanicalRadius;
     const nodeDamage =
       resolution.damage / Math.max(2.8, Math.sqrt(shot.impactPoints.length));
     shot.impactPoints.forEach((point, index) => {
@@ -1454,7 +1463,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           Math.min(best, Math.hypot(tank.x - point.x, tank.y - point.y)),
         Number.POSITIVE_INFINITY,
       );
-      const reach = 48 + behavior.tier * 12;
+      const reach = effectProfile.mechanicalRadius;
       if (closest < reach) {
         applyDamage(
           model,
@@ -1642,7 +1651,8 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       model.tanks.forEach((tank) => {
         if (
           tank.id !== model.tanks[shot.owner].id &&
-          distanceToSegment({ x: tank.x, y: tank.y - 5 }, start, end) <= 13
+          distanceToSegment({ x: tank.x, y: tank.y - 5 }, start, end) <=
+            effectProfile.mechanicalRadius
         ) {
           applyDamage(
             model,
@@ -1960,6 +1970,7 @@ function cameraShakeOffset(
   }
 
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
+  const profile = getWeaponEffectProfile(shot.weaponId);
   const startsAt =
     behavior.kind === "funky"
       ? (shot.impactTimes[0] ?? shot.resolvedAt)
@@ -1978,12 +1989,21 @@ function cameraShakeOffset(
     1,
   );
   const qualityScale = model.effectLevel === "balanced" ? 0.55 : 1;
-  const baseAmplitude =
-    behavior.kind === "funky"
-      ? 8
-      : behavior.kind === "blast" && behavior.tier === 4
-        ? 7
-        : 1.5 + behavior.tier * 1.15;
+  const signatureScale =
+    profile.signature === "nuclear"
+      ? 1.28
+      : profile.signature === "cascade"
+        ? 1.08
+        : profile.signature === "trail"
+          ? 0.38
+          : profile.signature === "growth"
+            ? 0.72
+            : 0.9;
+  const baseAmplitude = clamp(
+    (1.2 + Math.sqrt(profile.spectacleRadius) * 0.48) * signatureScale,
+    1.2,
+    12,
+  );
   const burst =
     behavior.kind === "funky"
       ? 0.5 + Math.abs(Math.sin(local * Math.PI * 5)) * 0.5
@@ -2383,6 +2403,170 @@ function drawProjectile(
   context.restore();
 }
 
+function drawRadialImpactEnvelope(
+  context: CanvasRenderingContext2D,
+  center: Vector2,
+  profile: WeaponEffectProfile,
+  weapon: (typeof WEAPONS)[number],
+  local: number,
+  effectLevel: EffectLevel,
+): void {
+  const reveal = 1 - Math.pow(1 - local, 3);
+  const fade = Math.max(0, 1 - local);
+  const mechanicalRadius = profile.mechanicalRadius * reveal;
+  const spectacleRadius =
+    profile.readableRadius +
+    (profile.spectacleRadius - profile.readableRadius) * reveal;
+  const reduced = effectLevel === "reduced";
+  const balanced = effectLevel === "balanced";
+
+  context.save();
+  context.translate(center.x, center.y);
+
+  // Solid ring and cardinal ticks are the exact mechanical/readable boundary.
+  context.strokeStyle = weapon.secondaryAccent;
+  context.lineWidth = reduced ? 1.8 : 2.6;
+  context.globalAlpha = Math.min(0.92, 0.34 + fade * 0.7);
+  context.beginPath();
+  context.arc(0, 0, mechanicalRadius, 0, Math.PI * 2);
+  context.stroke();
+  const tickCount = profile.signature === "nuclear" ? 12 : 8;
+  for (let tick = 0; tick < tickCount; tick += 1) {
+    const angle = (Math.PI * 2 * tick) / tickCount;
+    const inner = Math.max(0, mechanicalRadius - (reduced ? 3 : 6));
+    const outer = mechanicalRadius + (reduced ? 3 : 7);
+    context.beginPath();
+    context.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+    context.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+    context.stroke();
+  }
+
+  // Dashed echo rings are deliberately non-mechanical spectacle.
+  const echoCount = reduced
+    ? Math.min(1, profile.shockwaveCount)
+    : balanced
+      ? Math.min(2, profile.shockwaveCount)
+      : profile.shockwaveCount;
+  context.strokeStyle = weapon.accent;
+  context.setLineDash(reduced ? [4, 8] : [7, 11]);
+  context.lineWidth = reduced ? 1.2 : 2;
+  for (let echo = 0; echo < echoCount; echo += 1) {
+    const ringProgress = (echo + 1) / Math.max(1, echoCount);
+    const radius =
+      profile.readableRadius +
+      (spectacleRadius - profile.readableRadius) * ringProgress;
+    context.globalAlpha =
+      fade * (reduced ? 0.26 : 0.42) * (1 - echo * 0.13);
+    context.beginPath();
+    context.arc(0, 0, radius, 0, Math.PI * 2);
+    context.stroke();
+  }
+  context.setLineDash([]);
+
+  if (profile.signature === "nuclear") {
+    const light = context.createRadialGradient(
+      0,
+      0,
+      mechanicalRadius * 0.18,
+      0,
+      0,
+      Math.max(1, spectacleRadius),
+    );
+    light.addColorStop(0, `${weapon.secondaryAccent}7f`);
+    light.addColorStop(0.34, `${weapon.accent}36`);
+    light.addColorStop(1, `${weapon.accent}00`);
+    context.fillStyle = light;
+    context.globalAlpha = reduced ? 0.28 : balanced ? 0.46 : 0.64;
+    context.beginPath();
+    context.arc(0, 0, spectacleRadius, 0, Math.PI * 2);
+    context.fill();
+
+    const plumeHeight = spectacleRadius * (reduced ? 0.45 : 0.72);
+    context.strokeStyle = weapon.secondaryAccent;
+    context.globalAlpha = fade * (reduced ? 0.34 : 0.66);
+    context.lineWidth = reduced ? 2 : 5;
+    context.beginPath();
+    context.moveTo(0, -mechanicalRadius * 0.35);
+    context.bezierCurveTo(
+      -spectacleRadius * 0.18,
+      -plumeHeight * 0.45,
+      spectacleRadius * 0.2,
+      -plumeHeight * 0.72,
+      0,
+      -plumeHeight,
+    );
+    context.stroke();
+  } else if (!reduced && profile.signature !== "growth") {
+    const rayCount = balanced ? 6 : 10;
+    context.strokeStyle = weapon.accent;
+    context.globalAlpha = fade * 0.46;
+    context.lineWidth = 1.4;
+    for (let ray = 0; ray < rayCount; ray += 1) {
+      const angle = (Math.PI * 2 * ray) / rayCount + local * 0.22;
+      const inner = profile.readableRadius * (0.78 + local * 0.16);
+      const outer =
+        inner +
+        (profile.spectacleRadius - profile.readableRadius) *
+          (0.38 + (ray % 3) * 0.16);
+      context.beginPath();
+      context.moveTo(Math.cos(angle) * inner, Math.sin(angle) * inner);
+      context.lineTo(Math.cos(angle) * outer, Math.sin(angle) * outer);
+      context.stroke();
+    }
+  }
+
+  context.restore();
+}
+
+function drawImpactEnvelopes(
+  context: CanvasRenderingContext2D,
+  shot: ShotVisual,
+  progress: number,
+  effectLevel: EffectLevel,
+): void {
+  const profile = getWeaponEffectProfile(shot.weaponId);
+  if (
+    profile.shape !== "radial" &&
+    profile.shape !== "multi-radial" &&
+    profile.shape !== "subterranean" &&
+    profile.shape !== "terrain-fill"
+  ) {
+    return;
+  }
+
+  const weapon = catalogWeapon(shot.weaponId);
+  const sourcePoints =
+    shot.impactPoints.length > 0 ? shot.impactPoints : [shot.finalPoint];
+  const points = sourcePoints
+    .map((point, sourceIndex) => ({ point, sourceIndex }))
+    .filter(
+      ({ sourceIndex }) => sourcePoints.length <= 9 || sourceIndex % 2 === 0,
+    );
+  points.forEach(({ point, sourceIndex }) => {
+    const startsAt =
+      shot.impactTimes[
+        Math.min(sourceIndex, Math.max(0, shot.impactTimes.length - 1))
+      ] ?? shot.resolvedAt;
+    const local = clamp(
+      (progress - startsAt) /
+        Math.max(0.01, shot.endsAt - startsAt),
+      0,
+      1,
+    );
+    if (local <= 0 || local >= 1) {
+      return;
+    }
+    drawRadialImpactEnvelope(
+      context,
+      point,
+      profile,
+      weapon,
+      local,
+      effectLevel,
+    );
+  });
+}
+
 function drawShot(
   context: CanvasRenderingContext2D,
   shot: ShotVisual,
@@ -2708,6 +2892,10 @@ function drawShot(
     context.restore();
   }
 
+  if (!shot.fizzled) {
+    drawImpactEnvelopes(context, shot, progress, model.effectLevel);
+  }
+
   if (shot.fizzled && progress > shot.resolvedAt) {
     const local = clamp(
       (progress - shot.resolvedAt) /
@@ -2731,43 +2919,6 @@ function drawShot(
     context.restore();
   }
 
-  if (
-    progress > shot.resolvedAt &&
-    behavior.kind !== "napalm" &&
-    behavior.kind !== "liquid-dirt" &&
-    behavior.kind !== "funky" &&
-    behavior.kind !== "laser" &&
-    behavior.kind !== "settle" &&
-    behavior.kind !== "tracer" &&
-    !shot.fizzled
-  ) {
-    const aftermath = clamp(
-      (progress - shot.resolvedAt) /
-        Math.max(0.01, shot.endsAt - shot.resolvedAt),
-      0,
-      1,
-    );
-    context.save();
-    context.strokeStyle = weapon.accent;
-    context.lineWidth = 3 - aftermath * 2;
-    context.globalAlpha = 1 - aftermath;
-    const points =
-      shot.impactPoints.length > 12
-        ? shot.impactPoints.filter((_, index) => index % 2 === 0)
-        : shot.impactPoints;
-    points.forEach((point) => {
-      context.beginPath();
-      context.arc(
-        point.x,
-        point.y,
-        8 + aftermath * Math.max(24, weapon.demoResolution.radius * 1.4),
-        0,
-        Math.PI * 2,
-      );
-      context.stroke();
-    });
-    context.restore();
-  }
 }
 
 function updateParticles(
@@ -2836,29 +2987,17 @@ function spawnImpactParticles(
   shot: ShotVisual,
   effectLevel: EffectLevel,
 ): void {
-  const density =
-    effectLevel === "full" ? 1 : effectLevel === "balanced" ? 0.62 : 0.3;
   const random = new SeededRandom(`${shot.seed}:presentation`);
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
-  const baseCount =
-    behavior.kind === "funky"
-      ? 96
-      : behavior.kind === "airburst" || behavior.kind === "sandhog"
-        ? 62
-        : behavior.kind === "napalm"
-          ? 48
-          : behavior.kind === "dirt-sphere" ||
-              behavior.kind === "liquid-dirt" ||
-              behavior.kind === "dirt-wedge"
-            ? 40
-            : behavior.kind === "tracer"
-              ? shot.weaponId === "smokeTracer"
-                ? 42
-                : 14
-              : shot.fizzled
-                ? 12
-                : 52;
+  const profile = getWeaponEffectProfile(shot.weaponId);
+  const requestedBudget = shot.fizzled
+    ? Math.min(12, profile.particleBudget[effectLevel])
+    : profile.particleBudget[effectLevel];
+  const availableBudget = Math.max(
+    0,
+    Math.min(requestedBudget, MAX_ACTIVE_PARTICLES - particles.length),
+  );
   const funkyColors = [
     "#ff4f81",
     "#ffb84d",
@@ -2879,10 +3018,14 @@ function spawnImpactParticles(
     behavior.kind === "sandhog"
       ? shot.impactPoints
       : [shot.finalPoint];
+  let emitted = 0;
 
   if (shot.weaponId === "smokeTracer") {
     const trace = shot.segments[0]?.path ?? [];
-    const sampleCount = Math.max(8, Math.round(24 * density));
+    const sampleCount = Math.min(
+      availableBudget,
+      Math.max(6, Math.round(availableBudget * 0.7)),
+    );
     for (let index = 0; index < sampleCount; index += 1) {
       const point = pathPoint(trace, index / Math.max(1, sampleCount - 1));
       particles.push({
@@ -2898,14 +3041,22 @@ function spawnImpactParticles(
         gravity: -4,
         kind: "smoke",
       });
+      emitted += 1;
     }
   }
 
   centers.forEach((center) => {
-    const count = Math.max(6, Math.round((baseCount * density) / centers.length));
+    const remaining = Math.max(0, availableBudget - emitted);
+    const count = Math.min(
+      remaining,
+      Math.max(1, Math.ceil(remaining / Math.max(1, centers.length))),
+    );
     for (let index = 0; index < count; index += 1) {
       const angle = random.float(-Math.PI, 0);
-      const speed = random.float(35, 210);
+      const speed = random.float(
+        35,
+        clamp(profile.spectacleRadius * 1.8, 120, 360),
+      );
       const kind: Particle["kind"] =
         behavior.kind === "funky"
           ? index % 3 === 0
@@ -2930,13 +3081,24 @@ function spawnImpactParticles(
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         age: 0,
-        life: random.float(0.55, 1.55),
-        size: random.float(2, kind === "smoke" ? 9 : 5),
+        life: random.float(
+          0.55,
+          Math.max(0.9, profile.aftermathMs / 1_000),
+        ),
+        size: random.float(
+          2,
+          kind === "smoke"
+            ? 10
+            : profile.signature === "nuclear"
+              ? 7
+              : 5,
+        ),
         color: random.pick(colors),
         drag: kind === "smoke" ? 0.97 : 0.985,
         gravity: kind === "smoke" ? -8 : 190,
         kind,
       });
+      emitted += 1;
     }
   });
 }

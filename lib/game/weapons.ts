@@ -118,9 +118,9 @@ export type CanonicalBlastRadius =
 /**
  * Non-canonical tuning used by the current browser demo to resolve and present
  * all catalog entries. The 1.5 manual does not provide damage formulas, and it
- * omits effect counts and visual scale for most weapons. Radius mirrors the
- * canonical fixed/max radius where possible; otherwise every value here is a
- * provisional demo parameter, not a claim about original balance.
+ * omits effect counts and visual scale for most weapons. Radius is the
+ * provisional Quick Demo value selected by ADR 0004; canonical fixed/max
+ * values remain isolated in `blastRadius`. Nothing here claims Classic parity.
  */
 export interface DemoResolutionParameters {
   readonly radius: number;
@@ -198,7 +198,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#ffd166",
     secondaryAccent: "#fff3b0",
-    demoResolution: { radius: 10, damage: 18, count: 1, scale: 0.72 },
+    demoResolution: { radius: 18, damage: 18, count: 1, scale: 0.72 },
   }),
   defineWeapon({
     id: "missile",
@@ -220,7 +220,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#ffb703",
     secondaryAccent: "#fff0a6",
-    demoResolution: { radius: 20, damage: 34, count: 1, scale: 0.9 },
+    demoResolution: { radius: 34, damage: 34, count: 1, scale: 0.9 },
   }),
   defineWeapon({
     id: "babyNuke",
@@ -242,7 +242,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#b8f34a",
     secondaryAccent: "#fff36b",
-    demoResolution: { radius: 40, damage: 62, count: 1, scale: 1.2 },
+    demoResolution: { radius: 64, damage: 62, count: 1, scale: 1.2 },
   }),
   defineWeapon({
     id: "nuke",
@@ -264,7 +264,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 1,
     accent: "#eaff54",
     secondaryAccent: "#ff7b00",
-    demoResolution: { radius: 75, damage: 100, count: 1, scale: 1.62 },
+    demoResolution: { radius: 110, damage: 100, count: 1, scale: 1.62 },
   }),
   defineWeapon({
     id: "leapFrog",
@@ -286,7 +286,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#70e000",
     secondaryAccent: "#ccff33",
-    demoResolution: { radius: 30, damage: 36, count: 3, scale: 1.08 },
+    demoResolution: { radius: 44, damage: 36, count: 3, scale: 1.08 },
   }),
   defineWeapon({
     id: "funkyBomb",
@@ -308,7 +308,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 4,
     accent: "#ff4ecd",
     secondaryAccent: "#65f6ff",
-    demoResolution: { radius: 80, damage: 72, count: 12, scale: 1.45 },
+    demoResolution: { radius: 96, damage: 72, count: 12, scale: 1.45 },
   }),
   defineWeapon({
     id: "mirv",
@@ -330,7 +330,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#c77dff",
     secondaryAccent: "#80ffdb",
-    demoResolution: { radius: 20, damage: 32, count: 5, scale: 1.05 },
+    demoResolution: { radius: 32, damage: 32, count: 5, scale: 1.05 },
   }),
   defineWeapon({
     id: "deathsHead",
@@ -352,7 +352,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 4,
     accent: "#f72585",
     secondaryAccent: "#7209b7",
-    demoResolution: { radius: 35, damage: 48, count: 9, scale: 1.4 },
+    demoResolution: { radius: 52, damage: 48, count: 9, scale: 1.4 },
   }),
   defineWeapon({
     id: "napalm",
@@ -374,7 +374,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#ff6b35",
     secondaryAccent: "#ffd166",
-    demoResolution: { radius: 28, damage: 46, count: 12, scale: 1 },
+    demoResolution: { radius: 44, damage: 46, count: 12, scale: 1 },
   }),
   defineWeapon({
     id: "hotNapalm",
@@ -396,7 +396,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 4,
     accent: "#ff2d00",
     secondaryAccent: "#ffcf33",
-    demoResolution: { radius: 42, damage: 78, count: 20, scale: 1.35 },
+    demoResolution: { radius: 68, damage: 78, count: 20, scale: 1.35 },
   }),
   defineWeapon({
     id: "tracer",
@@ -462,7 +462,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#48cae4",
     secondaryAccent: "#caf0f8",
-    demoResolution: { radius: 10, damage: 20, count: 1, scale: 0.74 },
+    demoResolution: { radius: 18, damage: 20, count: 1, scale: 0.74 },
   }),
   defineWeapon({
     id: "roller",
@@ -484,7 +484,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#00b4d8",
     secondaryAccent: "#90e0ef",
-    demoResolution: { radius: 20, damage: 38, count: 1, scale: 0.96 },
+    demoResolution: { radius: 34, damage: 38, count: 1, scale: 0.96 },
   }),
   defineWeapon({
     id: "heavyRoller",
@@ -506,7 +506,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#0077b6",
     secondaryAccent: "#48cae4",
-    demoResolution: { radius: 45, damage: 70, count: 1, scale: 1.25 },
+    demoResolution: { radius: 68, damage: 70, count: 1, scale: 1.25 },
   }),
   defineWeapon({
     id: "riotCharge",
@@ -528,7 +528,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#ff9f1c",
     secondaryAccent: "#ffbf69",
-    demoResolution: { radius: 36, damage: 0, count: 1, scale: 0.82 },
+    demoResolution: { radius: 50, damage: 0, count: 1, scale: 0.82 },
   }),
   defineWeapon({
     id: "riotBlast",
@@ -550,7 +550,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#f77f00",
     secondaryAccent: "#fcbf49",
-    demoResolution: { radius: 60, damage: 0, count: 1, scale: 1.18 },
+    demoResolution: { radius: 84, damage: 0, count: 1, scale: 1.18 },
   }),
   defineWeapon({
     id: "riotBomb",
@@ -572,7 +572,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#f48c06",
     secondaryAccent: "#ffba08",
-    demoResolution: { radius: 30, damage: 0, count: 1, scale: 0.92 },
+    demoResolution: { radius: 48, damage: 0, count: 1, scale: 0.92 },
   }),
   defineWeapon({
     id: "heavyRiotBomb",
@@ -594,7 +594,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#dc2f02",
     secondaryAccent: "#ffba08",
-    demoResolution: { radius: 45, damage: 0, count: 1, scale: 1.18 },
+    demoResolution: { radius: 68, damage: 0, count: 1, scale: 1.18 },
   }),
   defineWeapon({
     id: "babyDigger",
@@ -616,7 +616,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#c97b36",
     secondaryAccent: "#f2cc8f",
-    demoResolution: { radius: 12, damage: 26, count: 1, scale: 0.74 },
+    demoResolution: { radius: 20, damage: 26, count: 1, scale: 0.74 },
   }),
   defineWeapon({
     id: "digger",
@@ -638,7 +638,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#a85d2a",
     secondaryAccent: "#dda15e",
-    demoResolution: { radius: 20, damage: 46, count: 1, scale: 0.96 },
+    demoResolution: { radius: 34, damage: 46, count: 1, scale: 0.96 },
   }),
   defineWeapon({
     id: "heavyDigger",
@@ -660,7 +660,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 1,
     accent: "#7f4f24",
     secondaryAccent: "#e6b566",
-    demoResolution: { radius: 34, damage: 72, count: 1, scale: 1.25 },
+    demoResolution: { radius: 52, damage: 72, count: 1, scale: 1.25 },
   }),
   defineWeapon({
     id: "babySandhog",
@@ -682,7 +682,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#e9c46a",
     secondaryAccent: "#f4a261",
-    demoResolution: { radius: 14, damage: 30, count: 3, scale: 0.82 },
+    demoResolution: { radius: 22, damage: 30, count: 3, scale: 0.82 },
   }),
   defineWeapon({
     id: "sandhog",
@@ -704,7 +704,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#d4a373",
     secondaryAccent: "#faedcd",
-    demoResolution: { radius: 20, damage: 50, count: 5, scale: 1.05 },
+    demoResolution: { radius: 32, damage: 50, count: 5, scale: 1.05 },
   }),
   defineWeapon({
     id: "heavySandhog",
@@ -726,7 +726,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 1,
     accent: "#bc6c25",
     secondaryAccent: "#fefae0",
-    demoResolution: { radius: 30, damage: 78, count: 7, scale: 1.34 },
+    demoResolution: { radius: 46, damage: 78, count: 7, scale: 1.34 },
   }),
   defineWeapon({
     id: "dirtClod",
@@ -748,7 +748,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#95d5b2",
     secondaryAccent: "#d8f3dc",
-    demoResolution: { radius: 20, damage: 0, count: 1, scale: 0.78 },
+    demoResolution: { radius: 32, damage: 0, count: 1, scale: 0.78 },
   }),
   defineWeapon({
     id: "dirtBall",
@@ -770,7 +770,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#74c69d",
     secondaryAccent: "#b7e4c7",
-    demoResolution: { radius: 35, damage: 0, count: 1, scale: 1 },
+    demoResolution: { radius: 52, damage: 0, count: 1, scale: 1 },
   }),
   defineWeapon({
     id: "tonOfDirt",
@@ -792,7 +792,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 1,
     accent: "#40916c",
     secondaryAccent: "#95d5b2",
-    demoResolution: { radius: 70, damage: 0, count: 1, scale: 1.45 },
+    demoResolution: { radius: 90, damage: 0, count: 1, scale: 1.45 },
   }),
   defineWeapon({
     id: "liquidDirt",
@@ -814,7 +814,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#52b788",
     secondaryAccent: "#d8f3dc",
-    demoResolution: { radius: 34, damage: 0, count: 16, scale: 1.05 },
+    demoResolution: { radius: 52, damage: 0, count: 16, scale: 1.05 },
   }),
   defineWeapon({
     id: "dirtCharge",
@@ -836,7 +836,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 1,
     accent: "#2d6a4f",
     secondaryAccent: "#74c69d",
-    demoResolution: { radius: 44, damage: 0, count: 1, scale: 1.08 },
+    demoResolution: { radius: 64, damage: 0, count: 1, scale: 1.08 },
   }),
   defineWeapon({
     id: "earthDisrupter",
@@ -858,7 +858,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 0,
     accent: "#9b5de5",
     secondaryAccent: "#cdb4db",
-    demoResolution: { radius: 72, damage: 0, count: 1, scale: 1.12 },
+    demoResolution: { radius: 96, damage: 0, count: 1, scale: 1.12 },
   }),
   defineWeapon({
     id: "plasmaBlast",
@@ -880,7 +880,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 3,
     accent: "#00f5d4",
     secondaryAccent: "#9b5de5",
-    demoResolution: { radius: 75, damage: 92, count: 1, scale: 1.5 },
+    demoResolution: { radius: 110, damage: 92, count: 1, scale: 1.5 },
   }),
   defineWeapon({
     id: "laser",
@@ -902,7 +902,7 @@ export const WEAPONS = Object.freeze([
     armsLevel: 2,
     accent: "#ff006e",
     secondaryAccent: "#00f5d4",
-    demoResolution: { radius: 3, damage: 62, count: 1, scale: 1.2 },
+    demoResolution: { radius: 7, damage: 62, count: 1, scale: 1.2 },
   }),
 ] satisfies readonly WeaponDefinition[]);
 

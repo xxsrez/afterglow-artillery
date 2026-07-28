@@ -1,6 +1,6 @@
 # Спецификация эффектов оружия
 
-- **Статус:** presentation-контракт полного Quick Demo arsenal принят
+- **Статус:** presentation-контракт и шкала envelopes полного Quick Demo arsenal приняты
 - **Обновлено:** 2026-07-28
 - **Область:** VFX, camera response, звук и читаемость оружия
 
@@ -32,6 +32,19 @@ projectile, столкновение, разделение payload, повреж
   информацию о механическом результате.
 - Повтор одного seed и списка команд даёт одинаковый итог независимо от fps и
   уровня эффектов.
+
+### Три spatial envelope
+
+- `mechanicalRadius`/half-width — единственная опасная область; участвует в
+  damage, terrain и collision.
+- `readableRadius` — сплошная граница с ticks, показывающая механический
+  масштаб без опоры только на цвет.
+- `spectacleRadius` — пунктирные echoes, rays, light, plume и particles,
+  которые не передаются обратно в simulation.
+
+Полная таблица 33 `current → proposed → readable → spectacle` и причины
+семейной шкалы находятся в
+[ADR 0004](../decisions/0004-quick-demo-effect-scale.md).
 
 ## 3. Четырёхтактная грамматика
 
@@ -82,6 +95,17 @@ Impact подчёркивает точку контакта и характер 
 Семейство даёт повторно используемые модули, но конкретное оружие должно
 отличаться минимум по трём осям: силуэт/форма, ритм, палитра, движение, звук,
 реакция камеры или остаточный след.
+
+Release 0.1 применяет следующие обязательные композиции:
+
+- small radial — один ticked boundary, короткий echo и локальный sparkle;
+- medium radial — два echoes, длиннее aftermath и более широкий burst;
+- cluster/chain — отдельные механические centers и общий ритм каскада;
+- terrain — точный контур операции плюс growth/cut/seismic particles;
+- nuclear — ticked mechanical circle, до четырёх dashed echoes, radial light
+  volume и plume;
+- flow/wedge/beam/global — собственная геометрия вместо ложного кругового
+  радиуса.
 
 ### Shield response
 
@@ -207,6 +231,8 @@ Funky Bomb получает особенно яркую seeded-хореогра�
 - атласы и повторное использование текстур;
 - ограниченные dirty regions для обновления материала;
 - динамическая плотность частиц, но стабильные механические cues;
+- явные per-weapon particle budgets до `220/132/60` для
+  Full/Balanced/Reduced и global cap `320`;
 - Canvas 2D остаётся принятым renderer Quick Demo; переход к WebGL допускается
   только после измерения ограничения и отдельного ADR;
 - пауза симуляции и корректное восстановление presentation после возвращения
