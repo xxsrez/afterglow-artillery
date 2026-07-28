@@ -4271,6 +4271,7 @@ export default function ScorchedGame() {
         if (!game.paused && !shot.resolved && progress >= shot.resolvedAt) {
           shot.resolved = true;
           const previousHealth = game.tanks.map((tank) => tank.health);
+          const previousY = game.tanks.map((tank) => tank.y);
           const materialBeforeResolution = audioMaterialAtImpact(game, shot);
           resolveWeapon(game, shot);
           spawnImpactParticles(
@@ -4303,6 +4304,29 @@ export default function ScorchedGame() {
               },
             ];
           });
+          const landings = game.tanks.flatMap((tank, index) => {
+            const distance = Math.max(
+              0,
+              tank.y - (previousY[index] ?? tank.y),
+            );
+            return distance > 8
+              ? [
+                  {
+                    distance,
+                    destroyed: tank.health <= 0,
+                    pan: audioPanForX(tank.x),
+                  },
+                ]
+              : [];
+          });
+          const criticalCrossings = game.tanks.flatMap((tank, index) => {
+            const previous = previousHealth[index] ?? tank.health;
+            return previous / tank.maxHealth > 0.3 &&
+              tank.health / tank.maxHealth <= 0.3 &&
+              tank.health > 0
+              ? [{ pan: audioPanForX(tank.x) }]
+              : [];
+          });
           void playAudioEvent({
             type: "resolution",
             weaponId: shot.weaponId,
@@ -4311,6 +4335,8 @@ export default function ScorchedGame() {
                 ? "hull"
                 : materialBeforeResolution,
             damages,
+            landings,
+            criticalCrossings,
             shieldEvents: game.shieldEvents.map(({ event }) => event),
             terrainCollapse: causesTerrainCollapse(shot),
             fizzled: shot.fizzled,
@@ -5002,23 +5028,35 @@ export default function ScorchedGame() {
         <button
           type="button"
           className={styles.toggleButton}
-          aria-pressed={model.audio.musicEnabled}
+          aria-pressed={
+            model.audioAvailable && model.audio.musicEnabled
+          }
           onClick={toggleMusic}
         >
           <span>Музыка</span>
           <span className={styles.toggleState}>
-            {model.audio.musicEnabled ? "Вкл" : "Выкл"}
+            {!model.audioAvailable
+              ? "Недоступно"
+              : model.audio.musicEnabled
+                ? "Вкл"
+                : "Выкл"}
           </span>
         </button>
         <button
           type="button"
           className={styles.toggleButton}
-          aria-pressed={model.audio.sfxEnabled}
+          aria-pressed={
+            model.audioAvailable && model.audio.sfxEnabled
+          }
           onClick={toggleSfx}
         >
           <span>Звуки</span>
           <span className={styles.toggleState}>
-            {model.audio.sfxEnabled ? "Вкл" : "Выкл"}
+            {!model.audioAvailable
+              ? "Недоступно"
+              : model.audio.sfxEnabled
+                ? "Вкл"
+                : "Выкл"}
           </span>
         </button>
       </div>

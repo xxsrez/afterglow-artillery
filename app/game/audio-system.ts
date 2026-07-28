@@ -424,6 +424,12 @@ export interface AudioDamageOutcome {
   readonly pan: number;
 }
 
+export interface AudioLandingOutcome {
+  readonly distance: number;
+  readonly destroyed: boolean;
+  readonly pan: number;
+}
+
 export type GameAudioEvent =
   | {
       readonly type: "weapon-timeline";
@@ -440,6 +446,8 @@ export type GameAudioEvent =
       readonly weaponId: PlayableSoundId;
       readonly material: AudioMaterial;
       readonly damages: readonly AudioDamageOutcome[];
+      readonly landings: readonly AudioLandingOutcome[];
+      readonly criticalCrossings: readonly { readonly pan: number }[];
       readonly shieldEvents: readonly ShieldEvent[];
       readonly terrainCollapse: boolean;
       readonly fizzled: boolean;
@@ -859,6 +867,50 @@ function resolutionPlan(
           gain: damage.destroyed ? 0.13 : 0.09,
           pan: damage.pan,
           priority: damage.destroyed ? 100 : priority + 80,
+        },
+        volume,
+      ),
+    );
+  });
+
+  event.landings.forEach((landing, index) => {
+    if (landing.distance <= 8) {
+      return;
+    }
+    const heavy = landing.distance > 54 || landing.destroyed;
+    voices.push(
+      voice(
+        {
+          id: `hull:landing:${index}`,
+          bus: "shieldArmor",
+          atMs: 42 + index * 22,
+          durationMs: heavy ? 620 : 240,
+          frequencyHz: heavy ? 74 : 138,
+          endFrequencyHz: heavy ? 38 : 92,
+          wave: heavy ? "square" : "triangle",
+          gain: heavy ? 0.11 : 0.062,
+          pan: landing.pan,
+          priority: heavy ? 96 : 82,
+        },
+        volume,
+      ),
+    );
+  });
+
+  event.criticalCrossings.forEach((critical, index) => {
+    voices.push(
+      voice(
+        {
+          id: `hull:critical-crossing:${index}`,
+          bus: "shieldArmor",
+          atMs: 74 + index * 18,
+          durationMs: 760,
+          frequencyHz: 118,
+          endFrequencyHz: 52,
+          wave: "sawtooth",
+          gain: 0.084,
+          pan: critical.pan,
+          priority: 97,
         },
         volume,
       ),

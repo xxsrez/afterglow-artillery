@@ -57,8 +57,9 @@ event создаёт не более `12` voices; Experimental профиль д
 частотой и/или waveform; `None` не изображается как активное поле.
 
 Health loss разделён на `light`, `medium`, `heavy` и `critical`; direct hull
-hit, destruction и terrain collapse добавляют отдельные слои. Impact material
-различает `air`, `soil`, `rock`, `liquid-fire` и `hull`.
+hit, однократное пересечение critical-порога, fall/landing, destruction и
+terrain collapse добавляют отдельные слои. Impact material различает `air`,
+`soil`, `rock`, `liquid-fire` и `hull`.
 
 ## 5. Музыка и микс
 

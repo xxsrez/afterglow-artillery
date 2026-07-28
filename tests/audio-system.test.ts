@@ -54,6 +54,8 @@ const resolution = (
   weaponId: "missile",
   material: "soil",
   damages: [],
+  landings: [],
+  criticalCrossings: [],
   shieldEvents,
   terrainCollapse: false,
   fizzled: false,
@@ -209,7 +211,7 @@ describe("pure audio event planning", () => {
     expect(new Set(familyFingerprints).size).toBe(5);
   });
 
-  it("maps damage intensity, direct hull hit, destruction and terrain collapse", () => {
+  it("maps damage, landing, critical crossing and terrain collapse", () => {
     expect([
       damageBucket(5, 100),
       damageBucket(12, 100),
@@ -231,6 +233,14 @@ describe("pure audio event planning", () => {
             pan: 0.7,
           },
         ],
+        landings: [
+          {
+            distance: 62,
+            destroyed: false,
+            pan: -0.4,
+          },
+        ],
+        criticalCrossings: [{ pan: -0.4 }],
       },
       enabled,
     );
@@ -243,6 +253,14 @@ describe("pure audio event planning", () => {
     expect(plan.voices.some((voice) => voice.id === "terrain:collapse")).toBe(
       true,
     );
+    expect(plan.voices.some((voice) => voice.id === "hull:landing:0")).toBe(
+      true,
+    );
+    expect(
+      plan.voices.some(
+        (voice) => voice.id === "hull:critical-crossing:0",
+      ),
+    ).toBe(true);
   });
 
   it("keeps music and SFX switches independent", () => {
