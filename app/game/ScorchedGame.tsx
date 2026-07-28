@@ -32,7 +32,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
-import { getGameKeyboardAction } from "./keyboard-controls";
+import {
+  angleDeltaForScreenDirection,
+  barrelEndX,
+  getGameKeyboardAction,
+} from "./keyboard-controls";
 import {
   WEAPON_SELECTOR_FILTERS,
   isWeaponSelectorCloseKey,
@@ -467,7 +471,7 @@ function canUseWeapon(tank: PlayerTank, weaponId: WeaponId): boolean {
 function projectileOrigin(tank: PlayerTank): Vector2 {
   const radians = (tank.angleDegrees * Math.PI) / 180;
   return {
-    x: tank.x + Math.cos(radians) * tank.direction * 24,
+    x: barrelEndX(tank.x, tank.angleDegrees, tank.direction, 24),
     y: tank.y - 7 - Math.sin(radians) * 24,
   };
 }
@@ -1768,7 +1772,7 @@ function drawTank(
 
   const radians = (tank.angleDegrees * Math.PI) / 180;
   const barrelEnd = {
-    x: tank.x + Math.cos(radians) * tank.direction * 25,
+    x: barrelEndX(tank.x, tank.angleDegrees, tank.direction, 25),
     y: tank.y - 8 - Math.sin(radians) * 25,
   };
 
@@ -3183,7 +3187,13 @@ export default function ScorchedGame() {
       switch (action.type) {
         case "adjust-angle":
           event.preventDefault();
-          adjustAngle(tank.angleDegrees + action.delta);
+          adjustAngle(
+            tank.angleDegrees +
+              angleDeltaForScreenDirection(
+                action.screenDirection,
+                tank.direction,
+              ),
+          );
           break;
         case "adjust-power":
           event.preventDefault();

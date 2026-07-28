@@ -1,5 +1,8 @@
 export type GameKeyboardAction =
-  | { readonly type: "adjust-angle"; readonly delta: -1 | 1 }
+  | {
+      readonly type: "adjust-angle";
+      readonly screenDirection: -1 | 1;
+    }
   | { readonly type: "adjust-power"; readonly delta: -10 | 10 }
   | { readonly type: "cycle-weapon"; readonly direction: -1 | 1 }
   | { readonly type: "fire" }
@@ -29,6 +32,23 @@ export function isKeyboardControlTarget(target: EventTarget | null): boolean {
   return tagName === "INPUT" || tagName === "BUTTON" || tagName === "SELECT";
 }
 
+export function angleDeltaForScreenDirection(
+  screenDirection: -1 | 1,
+  tankDirection: -1 | 1,
+): -1 | 1 {
+  return (-screenDirection * tankDirection) as -1 | 1;
+}
+
+export function barrelEndX(
+  originX: number,
+  angleDegrees: number,
+  tankDirection: -1 | 1,
+  length: number,
+): number {
+  const radians = (angleDegrees * Math.PI) / 180;
+  return originX + Math.cos(radians) * tankDirection * length;
+}
+
 export function getGameKeyboardAction(
   code: string,
   context: KeyboardControlContext,
@@ -51,9 +71,9 @@ export function getGameKeyboardAction(
 
   switch (code) {
     case "ArrowLeft":
-      return { type: "adjust-angle", delta: -1 };
+      return { type: "adjust-angle", screenDirection: -1 };
     case "ArrowRight":
-      return { type: "adjust-angle", delta: 1 };
+      return { type: "adjust-angle", screenDirection: 1 };
     case "ArrowUp":
       return { type: "adjust-power", delta: 10 };
     case "ArrowDown":

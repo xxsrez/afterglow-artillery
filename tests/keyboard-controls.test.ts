@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  angleDeltaForScreenDirection,
+  barrelEndX,
   getGameKeyboardAction,
   isKeyboardControlTarget,
 } from "../app/game/keyboard-controls";
@@ -15,11 +17,11 @@ describe("game keyboard controls", () => {
   it("maps horizontal arrows to angle and vertical arrows to power", () => {
     expect(getGameKeyboardAction("ArrowLeft", aimingContext)).toEqual({
       type: "adjust-angle",
-      delta: -1,
+      screenDirection: -1,
     });
     expect(getGameKeyboardAction("ArrowRight", aimingContext)).toEqual({
       type: "adjust-angle",
-      delta: 1,
+      screenDirection: 1,
     });
     expect(getGameKeyboardAction("ArrowUp", aimingContext)).toEqual({
       type: "adjust-power",
@@ -30,6 +32,53 @@ describe("game keyboard controls", () => {
       delta: -10,
     });
   });
+
+  it.each([
+    { player: "left-facing tank", tankDirection: -1 as const },
+    { player: "right-facing tank", tankDirection: 1 as const },
+  ])(
+    "moves the rendered barrel endpoint in screen space for the $player",
+    ({ tankDirection }) => {
+      const angleDegrees = 48;
+      const originX = 480;
+      const length = 25;
+      const initialBarrelEndX = barrelEndX(
+        originX,
+        angleDegrees,
+        tankDirection,
+        length,
+      );
+
+      for (const [code, expectedScreenDirection] of [
+        ["ArrowLeft", -1],
+        ["ArrowRight", 1],
+      ] as const) {
+        const action = getGameKeyboardAction(code, aimingContext);
+
+        expect(action?.type).toBe("adjust-angle");
+        if (action?.type !== "adjust-angle") {
+          throw new Error(`Expected an angle action for ${code}`);
+        }
+
+        const nextAngle =
+          angleDegrees +
+          angleDeltaForScreenDirection(
+            action.screenDirection,
+            tankDirection,
+          );
+        const nextBarrelEndX = barrelEndX(
+          originX,
+          nextAngle,
+          tankDirection,
+          length,
+        );
+
+        expect(Math.sign(nextBarrelEndX - initialBarrelEndX)).toBe(
+          expectedScreenDirection,
+        );
+      }
+    },
+  );
 
   it("keeps weapon cycling, firing, and pause shortcuts available", () => {
     expect(getGameKeyboardAction("KeyQ", aimingContext)).toEqual({
