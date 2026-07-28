@@ -33,6 +33,7 @@
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: contain;
   background: var(--obsidian-950, #07090a);
   touch-action: none;
 }
@@ -40,7 +41,7 @@
 .topHud {
   position: absolute;
   z-index: 4;
-  inset: max(10px, env(safe-area-inset-top)) 12px auto;
+  inset: 10px 12px auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: start;
@@ -215,8 +216,8 @@
 .iconButton {
   position: absolute;
   z-index: 6;
-  top: max(84px, calc(env(safe-area-inset-top) + 78px));
-  right: max(12px, env(safe-area-inset-right));
+  top: 84px;
+  right: 12px;
   display: grid;
   width: 44px;
   height: 44px;
@@ -277,9 +278,7 @@
 .controlDeck {
   position: absolute;
   z-index: 5;
-  inset: auto max(10px, env(safe-area-inset-right))
-    max(10px, env(safe-area-inset-bottom))
-    max(10px, env(safe-area-inset-left));
+  inset: auto 10px 10px;
   display: grid;
   grid-template-columns: minmax(160px, 0.84fr) minmax(240px, 1.34fr) minmax(180px, 0.94fr);
   align-items: end;
@@ -744,7 +743,7 @@
   border: 0;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 960px), (max-height: 560px) {
   .game {
     width: 100%;
     height: 100%;
@@ -752,7 +751,7 @@
   }
 
   .topHud {
-    inset: max(6px, env(safe-area-inset-top)) 7px auto;
+    inset: 6px 7px auto;
     gap: 6px;
   }
 
@@ -763,7 +762,7 @@
   }
 
   .playerLine {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .money {
@@ -779,45 +778,59 @@
   }
 
   .roundHud {
-    min-width: 92px;
+    min-width: 96px;
     padding: 6px 7px;
     border-radius: 10px;
   }
 
   .roundValue {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .windLine {
-    font-size: 8px;
+    font-size: 9px;
   }
 
   .statusRibbon {
     top: 62px;
-    max-width: 56%;
+    max-width: 58%;
     padding: 5px 9px;
-    font-size: 8px;
+    font-size: 9px;
   }
 
   .iconButton {
-    top: 57px;
+    top: 58px;
     right: 7px;
-    width: 38px;
-    height: 38px;
-    border-radius: 11px;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
   }
 
   .controlDeck {
-    inset: auto max(6px, env(safe-area-inset-right))
-      max(6px, env(safe-area-inset-bottom))
-      max(6px, env(safe-area-inset-left));
-    grid-template-columns: minmax(136px, 0.92fr) minmax(220px, 1.5fr) minmax(155px, 1fr);
+    inset: auto 6px 6px;
+    grid-template-columns: minmax(168px, 0.95fr) minmax(160px, 0.9fr) minmax(188px, 1.05fr);
     gap: 6px;
   }
 
   .controlPanel {
-    padding: 6px;
+    padding: 7px;
     border-radius: 12px;
+  }
+
+  .controlDeck > .controlPanel:first-child {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
+  }
+
+  .controlDeck > .controlPanel:first-child .controlHeader,
+  .powerBlock .controlHeader {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 0;
   }
 
   .controlHeader {
@@ -825,27 +838,27 @@
   }
 
   .controlName {
-    font-size: 7px;
+    font-size: 9px;
   }
 
   .controlValue {
-    font-size: 13px;
+    font-size: 16px;
   }
 
   .adjustRow {
-    grid-template-columns: 34px minmax(0, 1fr) 34px;
-    gap: 3px;
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
+    gap: 4px;
   }
 
   .stepButton {
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
-    font-size: 17px;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    font-size: 20px;
   }
 
   .slider {
-    height: 25px;
+    height: 48px;
   }
 
   .weaponRail {
@@ -854,38 +867,46 @@
   }
 
   .weaponList {
-    grid-auto-columns: minmax(68px, 1fr);
-    gap: 3px;
+    grid-auto-columns: minmax(72px, 1fr);
+    gap: 4px;
   }
 
   .weaponCard {
-    min-height: 53px;
-    padding: 6px 5px 5px;
-    border-radius: 9px;
+    min-height: 62px;
+    padding: 7px 6px 6px;
+    border-radius: 10px;
   }
 
   .weaponIcon {
     margin-bottom: 3px;
-    font-size: 13px;
+    font-size: 15px;
   }
 
   .weaponName {
-    font-size: 7px;
+    font-size: 9px;
   }
 
   .ammo {
-    font-size: 7px;
+    font-size: 8px;
   }
 
   .firePanel {
-    grid-template-columns: minmax(0, 1fr) 57px;
-    gap: 4px;
+    grid-template-columns: minmax(0, 1fr) 64px;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .powerBlock {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
   }
 
   .fireButton {
-    min-height: 61px;
-    border-radius: 10px;
-    font-size: 8px;
+    min-height: 64px;
+    border-radius: 12px;
+    font-size: 10px;
   }
 
   .shotHint {
@@ -914,6 +935,11 @@
 
   .modalActions {
     margin-top: 13px;
+  }
+
+  .modalButton,
+  .toggleButton {
+    min-height: 48px;
   }
 
   .shopHeader {
@@ -958,13 +984,13 @@
   }
 
   .statusRibbon {
-    top: 84px;
+    top: 58px;
   }
 
   .iconButton {
-    top: 46px;
-    width: 34px;
-    height: 34px;
+    top: 58px;
+    width: 48px;
+    height: 48px;
   }
 
   .overlay {
@@ -1017,14 +1043,6 @@
     display: none;
   }
 
-  .controlDeck {
-    grid-template-columns: minmax(128px, 0.9fr) minmax(200px, 1.55fr) minmax(145px, 1fr);
-  }
-
-  .weaponCard {
-    min-height: 47px;
-  }
-
   .weaponIcon {
     display: inline;
     margin-right: 3px;
@@ -1034,9 +1052,6 @@
     margin-top: 1px;
   }
 
-  .fireButton {
-    min-height: 55px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

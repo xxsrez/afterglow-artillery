@@ -2108,7 +2108,7 @@ export default function ScorchedGame() {
         </button>
       )}
 
-      {(model.phase === "aiming" || model.phase === "firing") && (
+      {model.phase === "aiming" && (
         <div className={styles.controlDeck}>
           <section className={styles.controlPanel} aria-label="Настройка угла">
             <div className={styles.controlHeader}>
