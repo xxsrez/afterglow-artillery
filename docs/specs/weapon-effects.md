@@ -83,6 +83,40 @@ Impact подчёркивает точку контакта и характер 
 отличаться минимум по трём осям: силуэт/форма, ритм, палитра, движение, звук,
 реакция камеры или остаточный след.
 
+### Shield response
+
+Quick Demo получает пять различимых не только цветом форм: магнитные дуги
+Arc Lifter, цельная оболочка Aegis, направленные линии Vector, слои Bastion и
+гибридная оболочка с короной Magnetar. None не рисует защитное поле.
+
+Механический `ShieldEvent` задаёт обязательный cue:
+
+- `absorb` — краткое заполнение поверхности и уменьшение capacity в HUD;
+- `deflect` — видимый отрезок от исходного impact к новой точке и стрелка;
+- `break` — разрыв оболочки и X-mark;
+- `bypass` — пунктир, проходящий сквозь поле;
+- `laser-immunity` — разрыв луча на короне Magnetar.
+
+Один и тот же cue остаётся в Full, Balanced и Reduced. Presentation не
+пересчитывает point, damage или capacity.
+
+| Воздействие | Решение Quick Demo |
+|---|---|
+| Ballistic и multi-warhead | deflection до payload; затем ordered absorption каждого события |
+| Roller | absorption в конечной точке roll path |
+| Digger | обычное endpoint absorption |
+| Sandhog | underground endpoints обходят absorption на 82% |
+| Napalm | каждый tank получает один shieldable итог по ближайшему flow point |
+| Plasma | shieldable owner-centered pulse; direct self-hit rule не применяется |
+| Laser | обычные shields обходятся; Magnetar даёт `laser-immunity` |
+| Riot Bomb и ballistic earth producers | нет absorption; deflecting field может перенаправить carrier и потратить свой charge |
+| Fall damage | shield bypass |
+
+Численные профили приняты в
+[ADR 0003](../decisions/0003-provisional-shield-profiles.md). Source-backed
+роли и открытые canonical величины остаются в
+[справочнике](../reference/original-game.md).
+
 ## 5. Funky Bomb
 
 ### Проверенный факт об оригинале

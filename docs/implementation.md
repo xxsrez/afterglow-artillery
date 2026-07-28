@@ -69,6 +69,34 @@ Seed определяет число, позиции и порядок chain nod
 - остальные profiles читают provisional `demoResolution.damage` и собственную
   геометрию behavior.
 
+## Shield showcase
+
+`lib/game/shields.ts` содержит отдельный типизированный каталог из None и пяти
+source-grounded shield families. Source-поля (`classicName`, price, bundle и
+arms level) отделены от собственных публичных имён и от неканонического
+`demoProfile`. Принятые числа и причины такого разделения зафиксированы в
+[ADR 0003](decisions/0003-provisional-shield-profiles.md).
+
+Чистые `resolveShieldDamage` и `resolveShieldDeflection` возвращают новый
+capacity и доменный `ShieldEvent`, не обращаясь к Canvas, времени или
+случайности. Adapter сохраняет `shieldId`, current/max capacity и последнюю
+реакцию на объекте конкретного tank. Ordered multi-warhead events расходуют
+его capacity последовательно. Self-fired direct hit, fall damage, underground
+bypass, обычный Laser и Magnetar immunity имеют явные ветки.
+
+Infinite Arsenal показывает отдельную кнопку Shield Bay рядом с оружием.
+Selector предлагает шесть бесплатных вариантов, работает мышью, touch,
+стрелками, Home/End, Enter/Space и Escape. Выбор P1 не меняет P2; modal
+закрывается на handoff, а выбранный shield и остаток заряда сохраняются.
+Оба HUD постоянно показывают публичное имя и `current/max capacity`.
+
+Canvas различает роли формой: magnetic arcs, solid shell, vector field,
+layered shell и hybrid crown. `absorb`, `deflect`, `break`, `bypass` и
+`laser-immunity` получают отдельные геометрические cues. Effect intensity
+меняет только декоративную presentation и не передаётся в shield resolver.
+Воспроизводимый browser-сценарий описан в
+[shield showcase verification](verification/shield-showcase.md).
+
 ## Реализованная экономика
 
 Source-backed параметры:
@@ -124,7 +152,8 @@ ammo policy.
 - симуляция не зависит от частиц, звука, частоты кадров и camera shake.
 
 Player-owned combat state хранится на стабильном объекте tank: выбранное
-оружие, угол, сила и inventory не разделяются между участниками hot-seat.
+оружие, shield family/capacity, угол, сила и inventory не разделяются между
+участниками hot-seat.
 Каждый shot фиксирует owner до асинхронного visual resolution; расход ammo,
 damage credit и восстановление следующего хода используют этого owner, а не
 позднее значение active player. При передаче хода transient Arsenal Deck
@@ -150,8 +179,9 @@ Arsenal Deck: все 33 позиции доступны в прокручива�
 роли, selected/depleted состояниями, стрелочной навигацией, `Escape` и
 возвратом focus. Modal блокирует случайный Fire, на коротком landscape
 становится bottom sheet, а при переходе в portrait закрывается перед
-orientation gate. Магазин сохраняет собственные cards и отдельно показывает
-buy/sell quotes.
+orientation gate. В Infinite Arsenal рядом находится отдельный Shield Bay с
+тем же focus/touch contract; оба selector закрываются при handoff. Магазин
+сохраняет собственные cards и отдельно показывает buy/sell quotes.
 Для пользователей с `prefers-reduced-motion` сокращаются тряска и декоративное
 движение, но не исчезают механические cues.
 
@@ -170,9 +200,10 @@ server-rendered HTML. После этого основной поток долж
 - состояние матча не переносится между устройствами;
 - все 33 weapons доступны, но их `demoResolution`, spread, flow, settle,
   damage, payout и sell-back не являются доказанным паритетом оригинала;
-- полный каталог accessories, guidance, batteries и canonical shield families
-  не реализован; поэтому отсутствуют battery scaling Plasma, поведение Laser с
-  batteries и иммунитет Super Mag;
+- остальные accessories, guidance и batteries не реализованы; battery scaling
+  Plasma/Laser отсутствует, а пять shield families используют явные
+  неканонические Quick Demo profiles до black-box сверки capacity, absorption
+  и deflection;
 - Napalm не моделирует подтверждённую зависимость heat от глубины pool;
 - Digger не отличает прямое попадание в tank с canonical fizzle;
 - Basic/Standard/Greedy coefficients, quantity-dependent sale offers и Free

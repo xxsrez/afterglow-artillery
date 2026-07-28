@@ -4,6 +4,7 @@ export * from "./economy";
 export * from "./match-policy";
 export * from "./player-turn";
 export * from "./random";
+export * from "./shields";
 export * from "./terrain";
 export * from "./types";
 export * from "./weapons";

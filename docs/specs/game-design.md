@@ -145,6 +145,18 @@ Classic, где default начинается с бесконечной Baby Miss
 - Batteries восстанавливают состояние и явно питают Plasma Blast; battery
   behavior Laser требует дополнительной проверки оригинала.
 - Shields поглощают или отклоняют внешние воздействия в зависимости от типа.
+- Quick Demo реализует пять source-grounded ролей под собственными публичными
+  названиями и отдельный вариант None. Capacity, absorption и deflection
+  являются явными детерминированными demo-профилями из
+  [ADR 0003](../decisions/0003-provisional-shield-profiles.md), а не
+  установленными параметрами Classic.
+- Прямое попадание собственного projectile обходит собственный shield;
+  вторичный self-effect разрешается как обычное внешнее воздействие. Laser
+  обходит обычные оболочки, а Magnetar Crown сохраняет подтверждённую роль
+  Super Mag и блокирует его.
+- В Infinite Arsenal shield выбирается отдельным control бесплатно и
+  независимо для каждого tank. Передача хода закрывает selector, но не
+  переносит выбор или capacity к другому игроку.
 - Parachutes предотвращают опасное падение при выполнении порога срабатывания.
 - Fuel позволяет двигаться по поверхности, расходуя больше на подъёме.
 - Guidance и contact trigger расходуются на конкретный выстрел и не должны
@@ -256,6 +268,8 @@ Desktop использует тот же layout с мышью, колесом и
 - одна тема процедурного рельефа;
 - три раунда, round rewards, interest и магазин между раундами;
 - полный каталог из 33 weapons с одним стартовым finite shot каждого;
+- пять shield families и None с независимым player-owned состоянием в
+  Infinite Arsenal showcase;
 - канонические price, bundle size, arms level и inventory cap;
 - детерминированные provisional mechanics для неизвестных формул;
 - уникальные cues семейства, усиленная хореография Funky Bomb, звук, camera
@@ -270,8 +284,8 @@ Desktop использует тот же layout с мышью, колесом и
 
 Следующий этап добавляет и проверяет:
 
-- accessories и их сеть контрмер;
-- battery scaling Plasma/Laser и иммунитет Super Mag;
+- остальные accessories и их сеть контрмер;
+- battery scaling Plasma/Laser и black-box сверка силы shield profiles;
 - pool-depth heat Napalm и direct-tank fizzle Digger;
 - Basic, Standard и Greedy с восстановленными денежными коэффициентами;
 - quantity-dependent selling и Free Market;

@@ -5,6 +5,7 @@ import {
   MAX_INVENTORY,
   Material,
   SeededRandom,
+  SHIELDS,
   TerrainGrid,
   WEAPONS,
   WORLD_HEIGHT,
@@ -16,6 +17,7 @@ import {
   consumePlayerWeapon,
   createDemoInventory,
   generateTerrain,
+  getShield,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   nextPlayerIndex,
@@ -23,12 +25,18 @@ import {
   quoteWeaponPurchase,
   quoteWeaponSale,
   restoreAvailableSelectedWeapon,
+  resolveShieldDamage,
+  resolveShieldDeflection,
   selectPlayerWeapon,
   sellWeapon,
   shouldOpenInterroundShop,
+  shieldCapacity,
   simulateTrajectory,
   updatePlayerAim,
   type DemoMatchMode,
+  type ShieldDamageKind,
+  type ShieldEvent,
+  type ShieldId,
   type Tank,
   type TrajectoryPoint,
   type Vector2,
@@ -48,6 +56,10 @@ import {
   barrelEndX,
   getGameKeyboardAction,
 } from "./keyboard-controls";
+import {
+  isShieldSelectorCloseKey,
+  nextShieldFocus,
+} from "./shield-selector";
 import {
   WEAPON_SELECTOR_FILTERS,
   isWeaponSelectorCloseKey,
@@ -183,14 +195,21 @@ type EffectLevel = "full" | "balanced" | "reduced";
 
 interface PlayerTank extends Tank {
   color: string;
+  shieldId: ShieldId;
   shield: number;
   maxShield: number;
+  shieldResponse: ShieldEvent["type"] | null;
   wins: number;
   damageDealt: number;
   bonusHealth: number;
   reserveShield: number;
   bankAtRoundStart: number;
   lastInterest: number;
+}
+
+interface ShieldMatchEvent {
+  readonly player: 0 | 1;
+  readonly event: ShieldEvent;
 }
 
 interface GameModel {
@@ -207,6 +226,7 @@ interface GameModel {
   tanks: [PlayerTank, PlayerTank];
   roundWinner: 0 | 1 | null;
   lastRoundWasDraw: boolean;
+  shieldEvents: ShieldMatchEvent[];
   paused: boolean;
   audioEnabled: boolean;
   reducedMotion: boolean;
@@ -423,8 +443,10 @@ function makePlayer(
     credits: 0,
     inventory: initialInventory(),
     color: PLAYER_COLORS[index],
-    shield: 24,
-    maxShield: 24,
+    shieldId: "shield",
+    shield: shieldCapacity("shield"),
+    maxShield: shieldCapacity("shield"),
+    shieldResponse: null,
     wins: 0,
     damageDealt: 0,
     bonusHealth: 0,
@@ -463,6 +485,7 @@ function createGame(seed = 41_705): GameModel {
     tanks: [makePlayer(0, terrain), makePlayer(1, terrain)],
     roundWinner: null,
     lastRoundWasDraw: false,
+    shieldEvents: [],
     paused: false,
     audioEnabled: true,
     reducedMotion: false,
@@ -1091,13 +1114,33 @@ function applyDamage(
   tank: PlayerTank,
   rawDamage: number,
   shieldBypass = 0,
+  kind: ShieldDamageKind = "blast",
+  directHit = false,
 ): number {
   const damage = Math.max(0, rawDamage);
-  const directDamage = damage * shieldBypass;
-  const shieldable = damage - directDamage;
-  const absorbed = Math.min(tank.shield, shieldable);
-  tank.shield -= absorbed;
-  const healthDamage = Math.max(0, directDamage + shieldable - absorbed);
+  const targetIndex = model.tanks[0].id === tank.id ? 0 : 1;
+  const result = resolveShieldDamage(
+    {
+      shieldId: tank.shieldId,
+      capacity: tank.shield,
+    },
+    {
+      incomingDamage: damage,
+      kind,
+      ownerIsTarget: attackerIndex === targetIndex,
+      directHit,
+      bypassFraction: shieldBypass,
+    },
+  );
+  tank.shield = result.remainingCapacity;
+  if (result.event) {
+    tank.shieldResponse = result.event.type;
+    model.shieldEvents.push({
+      player: targetIndex,
+      event: result.event,
+    });
+  }
+  const healthDamage = result.healthDamage;
   tank.health = Math.max(0, tank.health - healthDamage);
   const healthPowerLimit = Math.max(
     260,
@@ -1106,6 +1149,10 @@ function applyDamage(
   tank.power = Math.min(tank.power, healthPowerLimit);
   const attacker = model.tanks[attackerIndex];
   if (attacker.id !== tank.id) {
+    const absorbed =
+      result.event?.type === "absorb" || result.event?.type === "break"
+        ? result.event.absorbed
+        : 0;
     attacker.damageDealt += healthDamage + absorbed * 0.35;
   }
   return healthDamage;
@@ -1118,6 +1165,7 @@ function explosionDamage(
   radius: number,
   peakDamage: number,
   shieldBypass = 0,
+  kind: ShieldDamageKind = "blast",
 ): void {
   for (const tank of model.tanks) {
     const tankCenter = { x: tank.x, y: tank.y - 5 };
@@ -1133,6 +1181,8 @@ function explosionDamage(
       tank,
       peakDamage * (0.22 + falloff * 0.78),
       shieldBypass,
+      kind,
+      proximity <= TANK_HALF_HEIGHT + 5,
     );
   }
 }
@@ -1160,6 +1210,8 @@ function settleTanks(
         attackerIndex,
         tank,
         Math.min(36, (fall - 42) * 0.42),
+        1,
+        "fall",
       );
     }
   }
@@ -1224,6 +1276,72 @@ function distanceToSegment(
   });
 }
 
+function deflectImpactPoint(
+  model: GameModel,
+  shot: ShotVisual,
+  point: Vector2,
+): Vector2 {
+  const targetIndex = nextPlayerIndex(shot.owner);
+  const target = model.tanks[targetIndex];
+  const owner = model.tanks[shot.owner];
+  const result = resolveShieldDeflection(
+    {
+      shieldId: target.shieldId,
+      capacity: target.shield,
+    },
+    {
+      impact: point,
+      tankCenter: { x: target.x, y: target.y - 5 },
+      ownerIsTarget: false,
+      incomingDirection: owner.x <= target.x ? 1 : -1,
+    },
+  );
+
+  if (!result.event) {
+    return point;
+  }
+
+  const deflectedPoint = {
+    x: clamp(result.point.x, 4, WORLD_WIDTH - 4),
+    y: clamp(result.point.y, 4, WORLD_HEIGHT - 4),
+  };
+  target.shield = result.remainingCapacity;
+  target.shieldResponse = result.event.type;
+  model.shieldEvents.push({
+    player: targetIndex,
+    event: result.event,
+  });
+  shot.segments.push({
+    path: [point, deflectedPoint],
+    startsAt: Math.max(0, shot.resolvedAt - 0.08),
+    endsAt: Math.min(1, shot.resolvedAt + 0.035),
+    style: "energy",
+  });
+  return deflectedPoint;
+}
+
+function applyShieldDeflection(
+  model: GameModel,
+  shot: ShotVisual,
+): void {
+  const deflectable =
+    shot.behavior === "blast" ||
+    shot.behavior === "leap-frog" ||
+    shot.behavior === "airburst" ||
+    shot.behavior === "riot-bomb" ||
+    shot.behavior === "dirt-sphere";
+  if (!deflectable) {
+    return;
+  }
+
+  shot.impactPoints = shot.impactPoints.map((point) =>
+    deflectImpactPoint(model, shot, point),
+  );
+  shot.finalPoint =
+    shot.impactPoints[Math.floor(shot.impactPoints.length / 2)] ??
+    deflectImpactPoint(model, shot, shot.finalPoint);
+}
+
 function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
@@ -1233,6 +1351,8 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   if (shot.fizzled) {
     return;
   }
+
+  applyShieldDeflection(model, shot);
 
   if (behavior.kind === "blast") {
     model.terrain.carveCircle(
@@ -1341,6 +1461,8 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           shot.owner,
           tank,
           resolution.damage * (1 - closest / (reach + 18)),
+          0,
+          "napalm",
         );
       }
     }
@@ -1425,6 +1547,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           Math.max(1.4, Math.sqrt(undergroundPaths.length)) *
           (0.9 + (index % 3) * 0.06),
         0.82,
+        "underground",
       );
     });
     terrainChanged = true;
@@ -1500,6 +1623,8 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           shot.owner,
           tank,
           resolution.damage * (1 - proximity / (radius + 32)),
+          0,
+          "plasma",
         );
       }
     });
@@ -1519,7 +1644,15 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           tank.id !== model.tanks[shot.owner].id &&
           distanceToSegment({ x: tank.x, y: tank.y - 5 }, start, end) <= 13
         ) {
-          applyDamage(model, shot.owner, tank, resolution.damage, 1);
+          applyDamage(
+            model,
+            shot.owner,
+            tank,
+            resolution.damage,
+            1,
+            "laser",
+            true,
+          );
         }
       });
       terrainChanged = true;
@@ -1546,29 +1679,82 @@ function chooseAvailableWeapon(
   return availableSelectedWeapon(model.tanks[player], model.mode);
 }
 
+function shieldEventText(model: GameModel): string {
+  return model.shieldEvents
+    .slice(-2)
+    .map(({ player, event }) => {
+      const tank = model.tanks[player];
+      const shield = getShield(event.shieldId);
+      switch (event.type) {
+        case "absorb":
+          return `${tank.name}: ${shield.shortName} поглощает ${Math.ceil(
+            event.absorbed,
+          )}, заряд ${Math.ceil(event.remainingCapacity)}.`;
+        case "break":
+          return `${tank.name}: ${shield.shortName} разрушен; в корпус проходит ${Math.ceil(
+            event.healthDamage,
+          )}.`;
+        case "deflect":
+          return `${tank.name}: ${shield.shortName} отклоняет impact, заряд ${Math.ceil(
+            event.remainingCapacity,
+          )}.`;
+        case "laser-immunity":
+          return `${tank.name}: ${shield.shortName} блокирует Laser.`;
+        case "bypass":
+          return event.reason === "self-direct"
+            ? `${tank.name}: прямое собственное попадание проходит под щитом.`
+            : `${tank.name}: ${shield.shortName} не останавливает это воздействие.`;
+      }
+    })
+    .join(" ");
+}
+
+function withShieldEvents(model: GameModel, message: string): string {
+  const shieldMessage = shieldEventText(model);
+  return shieldMessage ? `${message} ${shieldMessage}` : message;
+}
+
 function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
   const weapon = catalogWeapon(shot.weaponId);
   if (shot.fizzled) {
-    return `${weapon.name}: carrier коснулся преграды до апогея и погас без взрыва.`;
+    return withShieldEvents(
+      model,
+      `${weapon.name}: carrier коснулся преграды до апогея и погас без взрыва.`,
+    );
   }
   if (DEMO_BEHAVIORS[shot.weaponId].kind === "tracer") {
-    return `${weapon.name}: траектория отмечена, прямой урон — 0.`;
+    return withShieldEvents(
+      model,
+      `${weapon.name}: траектория отмечена, прямой урон — 0.`,
+    );
   }
 
   const player = model.tanks[shot.owner];
   const opponent = model.tanks[nextPlayerIndex(shot.owner)];
 
   if (opponent.health <= 0 && player.health <= 0) {
-    return "Двойное уничтожение. Раунд завершён вничью.";
+    return withShieldEvents(
+      model,
+      "Двойное уничтожение. Раунд завершён вничью.",
+    );
   }
   if (opponent.health <= 0) {
-    return `${player.name} выводит соперника из строя.`;
+    return withShieldEvents(
+      model,
+      `${player.name} выводит соперника из строя.`,
+    );
   }
   if (player.health <= 0) {
-    return `${player.name} попадает под собственный удар.`;
+    return withShieldEvents(
+      model,
+      `${player.name} попадает под собственный удар.`,
+    );
   }
 
-  return `Рельеф стабилен. Ход переходит сопернику.`;
+  return withShieldEvents(
+    model,
+    "Рельеф стабилен. Ход переходит сопернику.",
+  );
 }
 
 function roundScore(tank: PlayerTank): number {
@@ -1647,8 +1833,9 @@ function prepareNextRound(model: GameModel): void {
     tank.y = tankY(model.terrain, tank.x);
     tank.maxHealth = 100 + tank.bonusHealth;
     tank.health = tank.maxHealth;
-    tank.maxShield = 20 + tank.reserveShield;
+    tank.maxShield = shieldCapacity(tank.shieldId, tank.reserveShield);
     tank.shield = tank.maxShield;
+    tank.shieldResponse = null;
     tank.bonusHealth = 0;
     tank.reserveShield = 0;
     tank.damageDealt = 0;
@@ -1815,6 +2002,148 @@ function cameraShakeOffset(
   };
 }
 
+function drawShieldField(
+  context: CanvasRenderingContext2D,
+  tank: PlayerTank,
+  now: number,
+): void {
+  const shield = getShield(tank.shieldId);
+  const shape = shield.demoProfile.visualShape;
+  if (
+    shape === "none" ||
+    (tank.shield <= 0 && tank.shieldResponse === null)
+  ) {
+    return;
+  }
+
+  const chargeRatio = clamp(
+    tank.shield / Math.max(1, tank.maxShield),
+    0,
+    1,
+  );
+  const pulse = 1 + Math.sin(now * 0.003 + tank.x) * 0.025;
+  const width = 28 * pulse;
+  const height = 23 * pulse;
+
+  context.save();
+  context.translate(tank.x, tank.y - 7);
+  context.strokeStyle = shield.accent;
+  context.fillStyle = shield.accent;
+  context.globalAlpha = 0.28 + chargeRatio * 0.34;
+  context.lineWidth = 2;
+
+  if (shape === "solid-shell" || shape === "hybrid-field") {
+    context.beginPath();
+    context.ellipse(0, 0, width, height, 0, 0, Math.PI * 2);
+    context.stroke();
+  }
+
+  if (shape === "magnetic-arcs" || shape === "hybrid-field") {
+    context.lineWidth = shape === "hybrid-field" ? 1.5 : 2.3;
+    [-1, 1].forEach((side) => {
+      context.beginPath();
+      context.arc(side * 7, 1, 22, Math.PI * 1.12, Math.PI * 1.88);
+      context.stroke();
+    });
+    [-10, 10].forEach((x) => {
+      context.beginPath();
+      context.moveTo(x - 4, -25);
+      context.lineTo(x, -31);
+      context.lineTo(x + 4, -25);
+      context.stroke();
+    });
+  }
+
+  if (shape === "vector-field") {
+    [-9, 0, 9].forEach((offset) => {
+      context.beginPath();
+      context.moveTo(-26 + offset * 0.22, 16 + offset);
+      context.quadraticCurveTo(8, -2 + offset, 25, -20 + offset * 0.3);
+      context.stroke();
+    });
+    context.beginPath();
+    context.moveTo(18, -25);
+    context.lineTo(27, -21);
+    context.lineTo(24, -12);
+    context.stroke();
+  }
+
+  if (shape === "layered-shell") {
+    [0, 5, 10].forEach((layer) => {
+      context.globalAlpha = 0.2 + chargeRatio * (0.34 - layer * 0.012);
+      context.beginPath();
+      context.ellipse(
+        0,
+        0,
+        width + layer,
+        height + layer * 0.68,
+        0,
+        0,
+        Math.PI * 2,
+      );
+      context.stroke();
+    });
+  }
+
+  if (shape === "hybrid-field") {
+    context.beginPath();
+    context.moveTo(-12, -25);
+    context.lineTo(-6, -34);
+    context.lineTo(0, -27);
+    context.lineTo(6, -34);
+    context.lineTo(12, -25);
+    context.stroke();
+  }
+
+  context.globalAlpha = 0.82;
+  context.lineWidth = 2.5;
+  switch (tank.shieldResponse) {
+    case "absorb":
+      context.globalAlpha = 0.11;
+      context.beginPath();
+      context.ellipse(0, 0, width + 4, height + 4, 0, 0, Math.PI * 2);
+      context.fill();
+      break;
+    case "deflect":
+      context.beginPath();
+      context.moveTo(-5, 0);
+      context.lineTo(18, -20);
+      context.lineTo(13, -20);
+      context.moveTo(18, -20);
+      context.lineTo(18, -15);
+      context.stroke();
+      break;
+    case "break":
+      context.beginPath();
+      context.moveTo(-15, -15);
+      context.lineTo(15, 15);
+      context.moveTo(15, -15);
+      context.lineTo(-15, 15);
+      context.stroke();
+      break;
+    case "bypass":
+      context.setLineDash([4, 3]);
+      context.beginPath();
+      context.moveTo(-36, 12);
+      context.lineTo(36, -12);
+      context.stroke();
+      context.setLineDash([]);
+      break;
+    case "laser-immunity":
+      context.beginPath();
+      context.moveTo(-38, 0);
+      context.lineTo(-12, 0);
+      context.moveTo(12, 0);
+      context.lineTo(38, 0);
+      context.stroke();
+      context.fillRect(-3, -13, 6, 26);
+      break;
+    case null:
+      break;
+  }
+  context.restore();
+}
+
 function drawTank(
   context: CanvasRenderingContext2D,
   tank: PlayerTank,
@@ -1842,26 +2171,7 @@ function drawTank(
   };
 
   context.save();
-  if (tank.shield > 0) {
-    const shieldPulse = 1 + Math.sin(now * 0.003 + tank.x) * 0.025;
-    context.strokeStyle = `rgba(104,229,239,${
-      0.28 + (tank.shield / Math.max(1, tank.maxShield)) * 0.25
-    })`;
-    context.lineWidth = 2;
-    context.setLineDash([5, 5]);
-    context.beginPath();
-    context.ellipse(
-      tank.x,
-      tank.y - 7,
-      28 * shieldPulse,
-      23 * shieldPulse,
-      0,
-      0,
-      Math.PI * 2,
-    );
-    context.stroke();
-    context.setLineDash([]);
-  }
+  drawShieldField(context, tank, now);
 
   if (isActive) {
     context.fillStyle = `${tank.color}1d`;
@@ -2807,6 +3117,10 @@ function weaponStyle(color: string): CSSProperties {
   return { "--weapon-color": color } as CSSProperties;
 }
 
+function shieldStyle(color: string): CSSProperties {
+  return { "--shield-color": color } as CSSProperties;
+}
+
 export default function ScorchedGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const terrainCacheRef = useRef<TerrainCache | null>(null);
@@ -2819,8 +3133,13 @@ export default function ScorchedGame() {
   const lastFrameRef = useRef(0);
   const weaponDialogRef = useRef<HTMLDialogElement | null>(null);
   const weaponTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const shieldDialogRef = useRef<HTMLDialogElement | null>(null);
+  const shieldTriggerRef = useRef<HTMLButtonElement | null>(null);
   const weaponOptionRefs = useRef<
     Partial<Record<WeaponId, HTMLButtonElement | null>>
+  >({});
+  const shieldOptionRefs = useRef<
+    Partial<Record<ShieldId, HTMLButtonElement | null>>
   >({});
   const [, setRevision] = useState(0);
   const [arsenalFilter, setArsenalFilter] =
@@ -2828,12 +3147,14 @@ export default function ScorchedGame() {
   const [weaponSelectorFilter, setWeaponSelectorFilter] =
     useState<WeaponSelectorFilterId>("all");
   const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
+  const [shieldSelectorOpen, setShieldSelectorOpen] = useState(false);
 
   const model = gameRef.current;
   const infiniteArsenal = isInfiniteArsenalMode(model.mode);
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
   const selectedWeaponDefinition = catalogWeapon(selectedWeapon);
+  const activeShieldDefinition = getShield(activeTank.shieldId);
   const controlsLocked = model.phase !== "aiming" || model.paused;
   const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
 
@@ -2853,11 +3174,27 @@ export default function ScorchedGame() {
     restoreWeaponTriggerFocus();
   }, [restoreWeaponTriggerFocus]);
 
-  const resetWeaponSelectorForTurnChange = useCallback(() => {
+  const restoreShieldTriggerFocus = useCallback(() => {
+    requestAnimationFrame(() => shieldTriggerRef.current?.focus());
+  }, []);
+
+  const closeShieldSelector = useCallback(() => {
+    setShieldSelectorOpen(false);
+    if (shieldDialogRef.current?.open) {
+      shieldDialogRef.current.close();
+    }
+    restoreShieldTriggerFocus();
+  }, [restoreShieldTriggerFocus]);
+
+  const resetTransientSelectorsForTurnChange = useCallback(() => {
     setWeaponSelectorOpen(false);
     setWeaponSelectorFilter("all");
+    setShieldSelectorOpen(false);
     if (weaponDialogRef.current?.open) {
       weaponDialogRef.current.close();
+    }
+    if (shieldDialogRef.current?.open) {
+      shieldDialogRef.current.close();
     }
   }, []);
 
@@ -2870,22 +3207,48 @@ export default function ScorchedGame() {
     ) {
       return;
     }
+    setShieldSelectorOpen(false);
+    if (shieldDialogRef.current?.open) {
+      shieldDialogRef.current.close();
+    }
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(true);
+  }, []);
+
+  const openShieldSelector = useCallback(() => {
+    const game = gameRef.current;
+    if (
+      !isInfiniteArsenalMode(game.mode) ||
+      game.phase !== "aiming" ||
+      game.paused ||
+      window.matchMedia("(orientation: portrait)").matches
+    ) {
+      return;
+    }
+    setWeaponSelectorOpen(false);
+    if (weaponDialogRef.current?.open) {
+      weaponDialogRef.current.close();
+    }
+    setShieldSelectorOpen(true);
   }, []);
 
   useEffect(() => {
     const portrait = window.matchMedia("(orientation: portrait)");
     const closeInPortrait = () => {
-      if (portrait.matches && weaponDialogRef.current?.open) {
-        closeWeaponSelector();
+      if (portrait.matches) {
+        if (weaponDialogRef.current?.open) {
+          closeWeaponSelector();
+        }
+        if (shieldDialogRef.current?.open) {
+          closeShieldSelector();
+        }
       }
     };
 
     portrait.addEventListener("change", closeInPortrait);
     closeInPortrait();
     return () => portrait.removeEventListener("change", closeInPortrait);
-  }, [closeWeaponSelector]);
+  }, [closeShieldSelector, closeWeaponSelector]);
 
   useEffect(() => {
     const dialog = weaponDialogRef.current;
@@ -2918,6 +3281,28 @@ export default function ScorchedGame() {
 
     return () => cancelAnimationFrame(frame);
   }, [selectedWeapon, weaponSelectorFilter, weaponSelectorOpen]);
+
+  useEffect(() => {
+    const dialog = shieldDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    if (!shieldSelectorOpen) {
+      if (dialog.open) {
+        dialog.close();
+      }
+      return;
+    }
+
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+    const frame = requestAnimationFrame(() => {
+      shieldOptionRefs.current[activeTank.shieldId]?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTank.shieldId, shieldSelectorOpen]);
 
   const ensureAudio = useCallback(async () => {
     if (!gameRef.current.audioEnabled) {
@@ -2952,8 +3337,9 @@ export default function ScorchedGame() {
     }
 
     shot.completed = true;
-    game.message = shotOutcomeText(game, shot);
-    resetWeaponSelectorForTurnChange();
+    const outcome = shotOutcomeText(game, shot);
+    game.message = outcome;
+    resetTransientSelectorsForTurnChange();
 
     const somebodyDestroyed = game.tanks.some((tank) => tank.health <= 0);
     game.turn += 1;
@@ -2966,12 +3352,12 @@ export default function ScorchedGame() {
         game.mode,
       );
       game.phase = "aiming";
-      game.message = `${game.tanks[game.activePlayer].name}: учитывайте ветер и след прошлого выстрела.`;
+      game.message = `${outcome} ${game.tanks[game.activePlayer].name}: учитывайте ветер и след прошлого выстрела.`;
     }
 
     shotRef.current = null;
     refresh();
-  }, [refresh, resetWeaponSelectorForTurnChange]);
+  }, [refresh, resetTransientSelectorsForTurnChange]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -3197,6 +3583,73 @@ export default function ScorchedGame() {
     weaponOptionRefs.current[nextId]?.focus();
   };
 
+  const selectShieldFromSelector = useCallback(
+    (shieldId: ShieldId) => {
+      const game = gameRef.current;
+      if (
+        !isInfiniteArsenalMode(game.mode) ||
+        game.phase !== "aiming" ||
+        game.paused
+      ) {
+        return;
+      }
+      const tank = game.tanks[game.activePlayer];
+      const shield = getShield(shieldId);
+      tank.shieldId = shieldId;
+      tank.maxShield = shieldCapacity(shieldId, tank.reserveShield);
+      tank.shield = tank.maxShield;
+      tank.shieldResponse = null;
+      game.message = `${tank.name}: выбран ${shield.name}, заряд ${Math.ceil(
+        tank.shield,
+      )}. Выбор второго пилота останется независимым.`;
+      closeShieldSelector();
+      refresh();
+    },
+    [closeShieldSelector, refresh],
+  );
+
+  const handleShieldGridKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const currentOption = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-shield-id]",
+    );
+
+    if (isShieldSelectorCloseKey(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeShieldSelector();
+      return;
+    }
+
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      currentOption?.dataset.shieldId
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectShieldFromSelector(
+        currentOption.dataset.shieldId as ShieldId,
+      );
+      return;
+    }
+
+    const currentId =
+      (currentOption?.dataset.shieldId as ShieldId | undefined) ??
+      activeTank.shieldId;
+    const nextId = nextShieldFocus(
+      SHIELDS.map((shield) => shield.id),
+      currentId,
+      event.key,
+    );
+    if (!nextId) {
+      return;
+    }
+
+    event.preventDefault();
+    shieldOptionRefs.current[nextId]?.focus();
+  };
+
   const cycleWeapon = useCallback(
     (direction: -1 | 1) => {
       const game = gameRef.current;
@@ -3238,6 +3691,10 @@ export default function ScorchedGame() {
     const owner = game.activePlayer;
     const weaponId = chooseAvailableWeapon(game, owner);
     const tank = game.tanks[owner];
+    game.shieldEvents = [];
+    game.tanks.forEach((player) => {
+      player.shieldResponse = null;
+    });
     consumePlayerWeapon(tank, weaponId, game.mode);
 
     impactAudioPlayedRef.current = false;
@@ -3549,6 +4006,7 @@ export default function ScorchedGame() {
     setArsenalFilter("all");
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(false);
+    setShieldSelectorOpen(false);
     refresh();
   }, [refresh]);
 
@@ -3624,7 +4082,11 @@ export default function ScorchedGame() {
                 : ""
             }`}
             style={playerStyle(tank.color)}
-            aria-label={`${tank.name}: состояние ${Math.ceil(tank.health)}, щит ${Math.ceil(tank.shield)}`}
+            aria-label={`${tank.name}: состояние ${Math.ceil(
+              tank.health,
+            )}, ${getShield(tank.shieldId).name}, заряд ${Math.ceil(
+              tank.shield,
+            )} из ${Math.ceil(tank.maxShield)}`}
           >
             <div className={styles.playerLine}>
               <span className={styles.playerIdentity}>
@@ -3651,7 +4113,10 @@ export default function ScorchedGame() {
             </div>
             <div className={styles.meterLabels}>
               <span>Корпус {Math.ceil(tank.health)}</span>
-              <span>Щит {Math.ceil(tank.shield)}</span>
+              <span>
+                {getShield(tank.shieldId).shortName}{" "}
+                {Math.ceil(tank.shield)}/{Math.ceil(tank.maxShield)}
+              </span>
             </div>
           </section>
         ))}
@@ -3701,7 +4166,11 @@ export default function ScorchedGame() {
       )}
 
       {model.phase === "aiming" && (
-        <div className={styles.controlDeck}>
+        <div
+          className={`${styles.controlDeck} ${
+            infiniteArsenal ? styles.controlDeckShowcase : ""
+          }`}
+        >
           <section className={styles.controlPanel} aria-label="Настройка угла">
             <div className={styles.controlHeader}>
               <span className={styles.controlName}>Угол</span>
@@ -3741,6 +4210,53 @@ export default function ScorchedGame() {
               </button>
             </div>
           </section>
+
+          {infiniteArsenal && (
+            <section
+              className={styles.shieldControl}
+              aria-label="Текущий щит"
+            >
+              <button
+                ref={shieldTriggerRef}
+                type="button"
+                className={styles.shieldTrigger}
+                style={shieldStyle(activeShieldDefinition.accent)}
+                onClick={openShieldSelector}
+                disabled={controlsLocked}
+                aria-haspopup="dialog"
+                aria-expanded={shieldSelectorOpen}
+                aria-controls="shield-selector-dialog"
+                data-game-keyboard-owner="aiming"
+                aria-label={`Открыть каталог щитов: ${
+                  activeShieldDefinition.name
+                }, заряд ${Math.ceil(activeTank.shield)} из ${Math.ceil(
+                  activeTank.maxShield,
+                )}`}
+              >
+                <span className={styles.shieldTriggerIcon} aria-hidden="true">
+                  {activeShieldDefinition.icon}
+                </span>
+                <span className={styles.shieldTriggerCopy}>
+                  <span className={styles.shieldTriggerEyebrow}>
+                    Щит пилота
+                  </span>
+                  <strong className={styles.shieldTriggerName}>
+                    {activeShieldDefinition.shortName}
+                  </strong>
+                  <span className={styles.shieldTriggerRole}>
+                    {activeShieldDefinition.confirmedRole}
+                  </span>
+                </span>
+                <span className={styles.shieldTriggerMeta}>
+                  <strong>
+                    {Math.ceil(activeTank.shield)}/
+                    {Math.ceil(activeTank.maxShield)}
+                  </strong>
+                  <span>Showcase 6</span>
+                </span>
+              </button>
+            </section>
+          )}
 
           <section
             className={styles.weaponControl}
@@ -3968,6 +4484,102 @@ export default function ScorchedGame() {
                         ? "∞"
                         : `× ${ammo}`}
                     </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        id="shield-selector-dialog"
+        ref={shieldDialogRef}
+        className={`${styles.weaponDialog} ${styles.shieldDialog}`}
+        aria-labelledby="shield-selector-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeShieldSelector();
+        }}
+        onClose={() => {
+          setShieldSelectorOpen(false);
+          restoreShieldTriggerFocus();
+        }}
+      >
+        <div
+          className={`${styles.weaponDialogShell} ${styles.shieldDialogShell}`}
+        >
+          <header className={styles.weaponDialogHeader}>
+            <div>
+              <p className={styles.weaponDialogEyebrow}>Shield Bay</p>
+              <h2 id="shield-selector-title">Щит текущего пилота</h2>
+              <p>
+                5 защитных семейств + None · выбор и заряд независимы для
+                каждого игрока
+              </p>
+            </div>
+            <button
+              type="button"
+              className={styles.weaponDialogClose}
+              onClick={closeShieldSelector}
+              aria-label="Закрыть каталог щитов"
+            >
+              ×
+            </button>
+          </header>
+
+          <div
+            className={`${styles.weaponGrid} ${styles.shieldGrid}`}
+            role="listbox"
+            aria-label="Каталог щитов"
+            onKeyDown={handleShieldGridKeyDown}
+          >
+            {SHIELDS.map((shield) => {
+              const selected = activeTank.shieldId === shield.id;
+              const capacity = shieldCapacity(
+                shield.id,
+                activeTank.reserveShield,
+              );
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  key={shield.id}
+                  ref={(node) => {
+                    shieldOptionRefs.current[shield.id] = node;
+                  }}
+                  data-shield-id={shield.id}
+                  className={`${styles.weaponOption} ${
+                    styles.shieldOption
+                  } ${selected ? styles.weaponOptionSelected : ""}`}
+                  style={shieldStyle(shield.accent)}
+                  aria-selected={selected}
+                  aria-label={`${shield.name}, ${
+                    shield.confirmedRole
+                  }, demo-заряд ${capacity}${
+                    selected ? ", выбрано" : ""
+                  }`}
+                  title={shield.description}
+                  onClick={() => selectShieldFromSelector(shield.id)}
+                >
+                  <span className={styles.weaponOptionLead}>
+                    <span
+                      className={`${styles.weaponOptionIcon} ${styles.shieldOptionIcon}`}
+                      aria-hidden="true"
+                    >
+                      {shield.icon}
+                    </span>
+                    <span className={styles.weaponOptionTitle}>
+                      <strong>{shield.name}</strong>
+                      <span>{shield.confirmedRole}</span>
+                    </span>
+                  </span>
+                  <span className={styles.weaponOptionDescription}>
+                    {shield.description}
+                  </span>
+                  <span className={styles.weaponOptionStatus}>
+                    <strong>{selected ? "Выбрано" : "Выбрать"}</strong>
+                    <span>заряд {capacity}</span>
                   </span>
                 </button>
               );

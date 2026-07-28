@@ -19,8 +19,12 @@
    уже принятые исходные решения.
 6. [Архитектура вертикального среза](decisions/0002-vertical-slice-architecture.md) —
    принятый renderer и граница симуляции/presentation.
-7. [Оригинальная игра](reference/original-game.md) — полный source-backed
+7. [Профили щитов Quick Demo](decisions/0003-provisional-shield-profiles.md) —
+   явная граница source-backed ролей и неканонических параметров showcase.
+8. [Оригинальная игра](reference/original-game.md) — полный source-backed
    каталог из 33 weapons, экономика и неизвестные параметры Scorched Earth 1.5.
+9. [Проверка shield showcase](verification/shield-showcase.md) —
+   воспроизводимый seed, stimulus и обязательные реакции пяти семейств.
 
 ## Пути чтения
 
