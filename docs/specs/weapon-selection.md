@@ -133,6 +133,9 @@ keyboard focus.
 - `baseline`: отдельный badge `Базовый`; никогда не depleted.
 - Фильтр и open/closed state являются presentation-state и не попадают в
   domain или replay.
+- При смене активного игрока selector закрывается, а presentation-фильтр
+  сбрасывается на `Все 33`; выбранное оружие, угол, сила и inventory
+  восстанавливаются из player-owned tank state.
 
 ## 5. Проверка
 

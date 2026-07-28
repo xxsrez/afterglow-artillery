@@ -9,15 +9,22 @@ import {
   WEAPONS,
   WORLD_HEIGHT,
   WORLD_WIDTH,
+  availableSelectedWeapon,
   applyInterest,
   calculateInterest,
+  consumePlayerWeapon,
   createDemoInventory,
   generateTerrain,
+  isPlayerWeaponAvailable,
+  nextPlayerIndex,
   purchaseWeapon,
   quoteWeaponPurchase,
   quoteWeaponSale,
+  restoreAvailableSelectedWeapon,
+  selectPlayerWeapon,
   sellWeapon,
   simulateTrajectory,
+  updatePlayerAim,
   type Tank,
   type TrajectoryPoint,
   type Vector2,
@@ -40,7 +47,6 @@ import {
 import {
   WEAPON_SELECTOR_FILTERS,
   isWeaponSelectorCloseKey,
-  isWeaponSelectable,
   nextWeaponFocus,
   weaponAmmoCount,
   weaponCategoryLabel,
@@ -194,7 +200,6 @@ interface GameModel {
   wind: number;
   turn: number;
   tanks: [PlayerTank, PlayerTank];
-  selectedWeapons: [WeaponId, WeaponId];
   roundWinner: 0 | 1 | null;
   lastRoundWasDraw: boolean;
   paused: boolean;
@@ -405,6 +410,7 @@ function makePlayer(
     x,
     y: tankY(terrain, x),
     direction: index === 0 ? 1 : -1,
+    selectedWeapon: "babyMissile",
     angleDegrees: 48,
     power: 400,
     health: 100,
@@ -449,7 +455,6 @@ function createGame(seed = 41_705): GameModel {
     wind: nextWind(seed, 1),
     turn: 0,
     tanks: [makePlayer(0, terrain), makePlayer(1, terrain)],
-    selectedWeapons: ["babyMissile", "babyMissile"],
     roundWinner: null,
     lastRoundWasDraw: false,
     paused: false,
@@ -465,7 +470,7 @@ function weaponAmmo(tank: PlayerTank, weaponId: WeaponId): number {
 }
 
 function canUseWeapon(tank: PlayerTank, weaponId: WeaponId): boolean {
-  return isWeaponSelectable(tank.inventory, weaponId);
+  return isPlayerWeaponAvailable(tank, weaponId);
 }
 
 function projectileOrigin(tank: PlayerTank): Vector2 {
@@ -656,9 +661,9 @@ function trajectoryApexIndex(
 
 function buildShot(
   model: GameModel,
+  owner: 0 | 1,
   weaponId: WeaponId,
 ): ShotVisual {
-  const owner = model.activePlayer;
   const tank = model.tanks[owner];
   const weapon = catalogWeapon(weaponId);
   const behavior = DEMO_BEHAVIORS[weaponId];
@@ -1072,6 +1077,7 @@ function buildShot(
 
 function applyDamage(
   model: GameModel,
+  attackerIndex: 0 | 1,
   tank: PlayerTank,
   rawDamage: number,
   shieldBypass = 0,
@@ -1088,7 +1094,7 @@ function applyDamage(
     Math.round(1_000 * (tank.health / tank.maxHealth)),
   );
   tank.power = Math.min(tank.power, healthPowerLimit);
-  const attacker = model.tanks[model.activePlayer];
+  const attacker = model.tanks[attackerIndex];
   if (attacker.id !== tank.id) {
     attacker.damageDealt += healthDamage + absorbed * 0.35;
   }
@@ -1097,6 +1103,7 @@ function applyDamage(
 
 function explosionDamage(
   model: GameModel,
+  attackerIndex: 0 | 1,
   center: Vector2,
   radius: number,
   peakDamage: number,
@@ -1110,11 +1117,21 @@ function explosionDamage(
       continue;
     }
     const falloff = 1 - proximity / reach;
-    applyDamage(model, tank, peakDamage * (0.22 + falloff * 0.78), shieldBypass);
+    applyDamage(
+      model,
+      attackerIndex,
+      tank,
+      peakDamage * (0.22 + falloff * 0.78),
+      shieldBypass,
+    );
   }
 }
 
-function settleTanks(model: GameModel, allowFallDamage = true): void {
+function settleTanks(
+  model: GameModel,
+  attackerIndex: 0 | 1,
+  allowFallDamage = true,
+): void {
   for (const tank of model.tanks) {
     const previousY = tank.y;
     const surface = model.terrain.surfaceY(tank.x);
@@ -1128,7 +1145,12 @@ function settleTanks(model: GameModel, allowFallDamage = true): void {
     tank.y = surface - TANK_HALF_HEIGHT;
     const fall = tank.y - previousY;
     if (allowFallDamage && fall > 54) {
-      applyDamage(model, tank, Math.min(36, (fall - 42) * 0.42));
+      applyDamage(
+        model,
+        attackerIndex,
+        tank,
+        Math.min(36, (fall - 42) * 0.42),
+      );
     }
   }
 }
@@ -1210,6 +1232,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     );
     explosionDamage(
       model,
+      shot.owner,
       shot.finalPoint,
       resolution.radius,
       resolution.damage,
@@ -1222,7 +1245,13 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       const multiplier = [0.68, 0.84, 1][index] ?? 1;
       const radius = Math.max(8, resolution.radius * multiplier);
       model.terrain.carveCircle(point.x, point.y, radius);
-      explosionDamage(model, point, radius, resolution.damage * multiplier);
+      explosionDamage(
+        model,
+        shot.owner,
+        point,
+        radius,
+        resolution.damage * multiplier,
+      );
     });
     terrainChanged = true;
   }
@@ -1234,7 +1263,13 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     shot.impactPoints.forEach((point, index) => {
       const wobble = 0.82 + (index % 4) * 0.08;
       model.terrain.carveCircle(point.x, point.y, nodeRadius * wobble);
-      explosionDamage(model, point, nodeRadius * 1.15, nodeDamage * wobble);
+      explosionDamage(
+        model,
+        shot.owner,
+        point,
+        nodeRadius * 1.15,
+        nodeDamage * wobble,
+      );
     });
     terrainChanged = true;
   }
@@ -1247,6 +1282,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       model.terrain.carveCircle(point.x, point.y, resolution.radius);
       explosionDamage(
         model,
+        shot.owner,
         point,
         resolution.radius + 2,
         perWarheadDamage,
@@ -1263,6 +1299,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     );
     explosionDamage(
       model,
+      shot.owner,
       shot.finalPoint,
       resolution.radius + 3,
       resolution.damage,
@@ -1291,6 +1328,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       if (closest < reach) {
         applyDamage(
           model,
+          shot.owner,
           tank,
           resolution.damage * (1 - closest / (reach + 18)),
         );
@@ -1344,6 +1382,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     );
     explosionDamage(
       model,
+      shot.owner,
       shot.finalPoint,
       endpointRadius + 2,
       resolution.damage,
@@ -1369,6 +1408,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       model.terrain.carveCircle(endpoint.x, endpoint.y, radius);
       explosionDamage(
         model,
+        shot.owner,
         endpoint,
         radius + 2,
         resolution.damage /
@@ -1447,6 +1487,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
         );
         applyDamage(
           model,
+          shot.owner,
           tank,
           resolution.damage * (1 - proximity / (radius + 32)),
         );
@@ -1468,7 +1509,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
           tank.id !== model.tanks[shot.owner].id &&
           distanceToSegment({ x: tank.x, y: tank.y - 5 }, start, end) <= 13
         ) {
-          applyDamage(model, tank, resolution.damage, 1);
+          applyDamage(model, shot.owner, tank, resolution.damage, 1);
         }
       });
       terrainChanged = true;
@@ -1481,6 +1522,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
 
   settleTanks(
     model,
+    shot.owner,
     behavior.kind !== "dirt-sphere" &&
       behavior.kind !== "liquid-dirt" &&
       behavior.kind !== "dirt-wedge",
@@ -1491,10 +1533,7 @@ function chooseAvailableWeapon(
   model: GameModel,
   player: 0 | 1,
 ): WeaponId {
-  const chosen = model.selectedWeapons[player];
-  return canUseWeapon(model.tanks[player], chosen)
-    ? chosen
-    : "babyMissile";
+  return availableSelectedWeapon(model.tanks[player]);
 }
 
 function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
@@ -1506,8 +1545,8 @@ function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
     return `${weapon.name}: траектория отмечена, прямой урон — 0.`;
   }
 
-  const player = model.tanks[model.activePlayer];
-  const opponent = model.tanks[model.activePlayer === 0 ? 1 : 0];
+  const player = model.tanks[shot.owner];
+  const opponent = model.tanks[nextPlayerIndex(shot.owner)];
 
   if (opponent.health <= 0 && player.health <= 0) {
     return "Двойное уничтожение. Раунд завершён вничью.";
@@ -2787,6 +2826,14 @@ export default function ScorchedGame() {
     restoreWeaponTriggerFocus();
   }, [restoreWeaponTriggerFocus]);
 
+  const resetWeaponSelectorForTurnChange = useCallback(() => {
+    setWeaponSelectorOpen(false);
+    setWeaponSelectorFilter("all");
+    if (weaponDialogRef.current?.open) {
+      weaponDialogRef.current.close();
+    }
+  }, []);
+
   const openWeaponSelector = useCallback(() => {
     const game = gameRef.current;
     if (
@@ -2879,22 +2926,22 @@ export default function ScorchedGame() {
 
     shot.completed = true;
     game.message = shotOutcomeText(game, shot);
+    resetWeaponSelectorForTurnChange();
 
     const somebodyDestroyed = game.tanks.some((tank) => tank.health <= 0);
     game.turn += 1;
     if (somebodyDestroyed || game.turn >= MAX_TURNS_PER_ROUND) {
       completeRound(game);
     } else {
-      game.activePlayer = game.activePlayer === 0 ? 1 : 0;
-      const nextWeapon = chooseAvailableWeapon(game, game.activePlayer);
-      game.selectedWeapons[game.activePlayer] = nextWeapon;
+      game.activePlayer = nextPlayerIndex(shot.owner);
+      restoreAvailableSelectedWeapon(game.tanks[game.activePlayer]);
       game.phase = "aiming";
       game.message = `${game.tanks[game.activePlayer].name}: учитывайте ветер и след прошлого выстрела.`;
     }
 
     shotRef.current = null;
     refresh();
-  }, [refresh]);
+  }, [refresh, resetWeaponSelectorForTurnChange]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -3003,11 +3050,9 @@ export default function ScorchedGame() {
       if (game.phase !== "aiming" || game.paused) {
         return;
       }
-      game.tanks[game.activePlayer].angleDegrees = clamp(
-        Math.round(next),
-        5,
-        88,
-      );
+      updatePlayerAim(game.tanks[game.activePlayer], {
+        angleDegrees: clamp(Math.round(next), 5, 88),
+      });
       refresh();
     },
     [refresh],
@@ -3024,7 +3069,9 @@ export default function ScorchedGame() {
         260,
         Math.round(1_000 * (tank.health / tank.maxHealth)),
       );
-      tank.power = clamp(Math.round(next / 10) * 10, 180, healthLimit);
+      updatePlayerAim(tank, {
+        power: clamp(Math.round(next / 10) * 10, 180, healthLimit),
+      });
       refresh();
     },
     [refresh],
@@ -3036,12 +3083,12 @@ export default function ScorchedGame() {
       if (game.phase !== "aiming" || game.paused) {
         return;
       }
-      if (!canUseWeapon(game.tanks[game.activePlayer], weaponId)) {
+      const tank = game.tanks[game.activePlayer];
+      if (!selectPlayerWeapon(tank, weaponId)) {
         game.message = `${catalogWeapon(weaponId).name}: боезапас исчерпан.`;
         refresh();
         return;
       }
-      game.selectedWeapons[game.activePlayer] = weaponId;
       game.message = weaponStatus(weaponId);
       void ensureAudio();
       refresh();
@@ -3135,17 +3182,13 @@ export default function ScorchedGame() {
       return;
     }
 
-    const weaponId = chooseAvailableWeapon(game, game.activePlayer);
-    const tank = game.tanks[game.activePlayer];
-    if (catalogWeapon(weaponId).ammo.kind === "finite") {
-      tank.inventory[weaponId] = Math.max(
-        0,
-        (tank.inventory[weaponId] ?? 0) - 1,
-      );
-    }
+    const owner = game.activePlayer;
+    const weaponId = chooseAvailableWeapon(game, owner);
+    const tank = game.tanks[owner];
+    consumePlayerWeapon(tank, weaponId);
 
     impactAudioPlayedRef.current = false;
-    shotRef.current = buildShot(game, weaponId);
+    shotRef.current = buildShot(game, owner, weaponId);
     game.phase = "firing";
     game.message = `${tank.name} запускает «${catalogWeapon(weaponId).name}».`;
     refresh();

@@ -108,6 +108,14 @@ Source-backed параметры:
 - звук синтезируется через Web Audio после пользовательского действия;
 - симуляция не зависит от частиц, звука, частоты кадров и camera shake.
 
+Player-owned combat state хранится на стабильном объекте tank: выбранное
+оружие, угол, сила и inventory не разделяются между участниками hot-seat.
+Каждый shot фиксирует owner до асинхронного visual resolution; расход ammo,
+damage credit и восстановление следующего хода используют этого owner, а не
+позднее значение active player. При передаче хода transient Arsenal Deck
+закрывается и сбрасывает presentation-фильтр. Звук, effect intensity, reduced
+motion, pause, ruleset, round, wind и мир остаются общими настройками матча.
+
 Чистые системы находятся в `lib/game/`, presentation — в `app/game/`. Их
 граница и выбор renderer зафиксированы в
 [ADR 0002](decisions/0002-vertical-slice-architecture.md).

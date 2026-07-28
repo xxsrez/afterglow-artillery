@@ -12,18 +12,22 @@ export interface Vector2 {
 
 export type Inventory = Partial<Record<WeaponId, number>>;
 
-export interface Tank {
+export interface PlayerTurnState {
+  selectedWeapon: WeaponId;
+  angleDegrees: number;
+  power: number;
+  inventory: Inventory;
+}
+
+export interface Tank extends PlayerTurnState {
   readonly id: TankId;
   name: string;
   x: number;
   y: number;
   direction: ShotDirection;
-  angleDegrees: number;
-  power: number;
   health: number;
   maxHealth: number;
   credits: number;
-  inventory: Inventory;
 }
 
 export type MatchPhase =
