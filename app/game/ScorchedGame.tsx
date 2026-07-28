@@ -31,6 +31,7 @@ import {
   type CSSProperties,
 } from "react";
 
+import { getGameKeyboardAction } from "./keyboard-controls";
 import styles from "./ScorchedGame.module.css";
 
 const TOTAL_ROUNDS = 3;
@@ -3025,56 +3026,40 @@ export default function ScorchedGame() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLButtonElement ||
-        event.target instanceof HTMLSelectElement
-      ) {
+      const game = gameRef.current;
+      const action = getGameKeyboardAction(event.code, {
+        phase: game.phase,
+        paused: game.paused,
+        target: event.target,
+      });
+
+      if (action === null) {
         return;
       }
 
-      if (event.code === "Escape" || event.code === "KeyP") {
-        const game = gameRef.current;
-        if (
-          game.phase === "aiming" ||
-          game.phase === "firing" ||
-          game.paused
-        ) {
-          game.paused = !game.paused;
-          refresh();
-        }
+      if (action.type === "toggle-pause") {
+        game.paused = !game.paused;
+        refresh();
         return;
       }
 
-      if (gameRef.current.phase !== "aiming") {
-        return;
-      }
-
-      if (event.code === "ArrowUp") {
-        event.preventDefault();
-        adjustAngle(gameRef.current.tanks[gameRef.current.activePlayer].angleDegrees + 1);
-      }
-      if (event.code === "ArrowDown") {
-        event.preventDefault();
-        adjustAngle(gameRef.current.tanks[gameRef.current.activePlayer].angleDegrees - 1);
-      }
-      if (event.code === "ArrowRight") {
-        event.preventDefault();
-        adjustPower(gameRef.current.tanks[gameRef.current.activePlayer].power + 10);
-      }
-      if (event.code === "ArrowLeft") {
-        event.preventDefault();
-        adjustPower(gameRef.current.tanks[gameRef.current.activePlayer].power - 10);
-      }
-      if (event.code === "KeyQ") {
-        cycleWeapon(-1);
-      }
-      if (event.code === "KeyE") {
-        cycleWeapon(1);
-      }
-      if (event.code === "Space" || event.code === "Enter") {
-        event.preventDefault();
-        void fire();
+      const tank = game.tanks[game.activePlayer];
+      switch (action.type) {
+        case "adjust-angle":
+          event.preventDefault();
+          adjustAngle(tank.angleDegrees + action.delta);
+          break;
+        case "adjust-power":
+          event.preventDefault();
+          adjustPower(tank.power + action.delta);
+          break;
+        case "cycle-weapon":
+          cycleWeapon(action.direction);
+          break;
+        case "fire":
+          event.preventDefault();
+          void fire();
+          break;
       }
     };
 
@@ -3558,7 +3543,7 @@ export default function ScorchedGame() {
                 aria-label="Сила выстрела"
               />
               <span className={styles.shotHint}>
-                ← → сила · ↑ ↓ угол · Q/E оружие
+                ← → угол · ↑ ↓ сила · Q/E оружие
               </span>
             </div>
             <button
