@@ -1,0 +1,23 @@
+.DS_Store
+
+# Будущие зависимости и результаты сборки.
+node_modules/
+dist/
+coverage/
+.next/
+.vinext/
+.wrangler/
+.vite/
+*.tsbuildinfo
+
+# Локальные настройки и логи.
+.env
+.env.*
+!.env.example
+*.log
+
+# Локальные архивы и отчёты публикации.
+*.tar.gz
+*.zip
+playwright-report/
+test-results/
