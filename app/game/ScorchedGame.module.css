@@ -265,6 +265,7 @@
 
 .iconButton:focus-visible,
 .audioRecoveryButton:focus-visible,
+.audioTestButton:focus-visible,
 .stepButton:focus-visible,
 .fireButton:focus-visible,
 .weaponTrigger:focus-visible,
@@ -1123,6 +1124,38 @@
   margin: 0;
   accent-color: #62dff7;
   cursor: pointer;
+}
+
+.audioTest {
+  display: grid;
+  grid-template-columns: minmax(132px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.audioTest p {
+  margin: 0;
+  color: #9fb5c5;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.audioTestButton {
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px solid rgba(99, 226, 248, 0.42);
+  border-radius: 11px;
+  color: #dffaff;
+  background: rgba(39, 131, 158, 0.2);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.audioTestButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .audioUnavailable {

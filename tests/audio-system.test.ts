@@ -18,10 +18,13 @@ import {
   audioPlanForEvent,
   configurePlaybackAudioSession,
   damageBucket,
+  isAppleMobileWebKit,
   loadAudioPreferences,
   normalizeAudioPreferences,
   saveAudioPreferences,
   type AudioPreferences,
+  type AudioMediaBridge,
+  type AudioMediaBridgeState,
   type GameAudioEvent,
   type RuntimeAudioContextState,
 } from "../app/game/audio-system";
@@ -281,6 +284,35 @@ describe("pure audio event planning", () => {
         .length,
     ).toBeGreaterThan(0);
   });
+
+  it("keeps plan gains independent from the runtime volume bus", () => {
+    const quiet = audioPlanForEvent(timeline(), {
+      ...enabled,
+      sfxVolume: 10,
+    });
+    const loud = audioPlanForEvent(timeline(), {
+      ...enabled,
+      sfxVolume: 100,
+    });
+
+    expect(quiet.voices.map(({ gain }) => gain)).toEqual(
+      loud.voices.map(({ gain }) => gain),
+    );
+  });
+
+  it("keeps the procedural score inside a phone-audible spectrum", () => {
+    const plan = audioPlanForEvent(
+      { type: "music", state: "round-result" },
+      enabled,
+    );
+    expect(Math.min(...plan.voices.map(({ frequencyHz }) => frequencyHz))).toBe(
+      196,
+    );
+    expect(Math.max(...plan.voices.map(({ frequencyHz }) => frequencyHz))).toBe(
+      587.33,
+    );
+    expect(Math.max(...plan.voices.map(({ gain }) => gain))).toBe(0.04);
+  });
 });
 
 describe("audio preference persistence", () => {
@@ -346,7 +378,13 @@ class FakeOscillator extends FakeNode {
   public readonly detune = new FakeAudioParam();
   public onended: (() => void) | null = null;
 
-  public start(): void {}
+  public constructor(private readonly events: string[] = []) {
+    super();
+  }
+
+  public start(): void {
+    this.events.push("source-start");
+  }
   public stop(): void {}
 }
 
@@ -381,6 +419,7 @@ class FakeAudioContext {
   public readonly destination = new FakeNode();
   private stateChangeListener: (() => void) | null = null;
   private runningSince = 0;
+  public readonly events: string[] = [];
 
   public constructor(
     state: RuntimeAudioContextState = "suspended",
@@ -388,6 +427,7 @@ class FakeAudioContext {
       | "running"
       | "frozen"
       | "unchanged"
+      | "pending"
       | "reject" = "running",
   ) {
     this.state = state;
@@ -409,7 +449,7 @@ class FakeAudioContext {
     return new FakeCompressor() as unknown as DynamicsCompressorNode;
   }
   public createOscillator(): OscillatorNode {
-    return new FakeOscillator() as unknown as OscillatorNode;
+    return new FakeOscillator(this.events) as unknown as OscillatorNode;
   }
   public createStereoPanner(): StereoPannerNode {
     return new FakePanner() as unknown as StereoPannerNode;
@@ -434,8 +474,12 @@ class FakeAudioContext {
     }
   }
   public async resume(): Promise<void> {
+    this.events.push("resume");
     if (this.resumeOutcome === "reject") {
       throw new Error("resume rejected");
+    }
+    if (this.resumeOutcome === "pending") {
+      return new Promise<void>(() => undefined);
     }
     if (
       this.resumeOutcome === "running" ||
@@ -456,6 +500,27 @@ class FakeAudioContext {
   }
 }
 
+class FakeMediaBridge implements AudioMediaBridge {
+  public state: AudioMediaBridgeState = "idle";
+
+  public constructor(private readonly events: string[]) {}
+
+  public async start(): Promise<void> {
+    this.events.push("bridge-start");
+    this.state = "playing";
+  }
+
+  public pause(): void {
+    this.events.push("bridge-pause");
+    this.state = "idle";
+  }
+
+  public dispose(): void {
+    this.events.push("bridge-dispose");
+    this.state = "idle";
+  }
+}
+
 describe("AudioDirector lifecycle and budgets", () => {
   it("requests the playback audio session when Safari exposes AudioSession", () => {
     const audioSession = { type: "auto", state: "inactive" };
@@ -464,6 +529,67 @@ describe("AudioDirector lifecycle and budgets", () => {
     ).toBe("playback");
     expect(audioSession.type).toBe("playback");
     expect(configurePlaybackAudioSession({})).toBeNull();
+  });
+
+  it("detects native iPhone/iPad WebKit for the media-route fallback", () => {
+    expect(
+      isAppleMobileWebKit({
+        userAgent:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 16_7 like Mac OS X) AppleWebKit/605.1.15",
+      }),
+    ).toBe(true);
+    expect(
+      isAppleMobileWebKit({
+        platform: "MacIntel",
+        maxTouchPoints: 5,
+      }),
+    ).toBe(true);
+    expect(
+      isAppleMobileWebKit({
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/140",
+      }),
+    ).toBe(false);
+  });
+
+  it("starts the unlock source and media route before awaiting resume", async () => {
+    const context = new FakeAudioContext("suspended");
+    const bridge = new FakeMediaBridge(context.events);
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      {
+        mediaBridge: bridge,
+        outputRoute: "media-element-fallback",
+      },
+    );
+
+    const report = await director.activate(enabled);
+
+    expect(context.events.indexOf("source-start")).toBeLessThan(
+      context.events.indexOf("resume"),
+    );
+    expect(context.events.indexOf("bridge-start")).toBeLessThan(
+      context.events.indexOf("resume"),
+    );
+    expect(report.outputRoute).toBe("media-element-fallback");
+    expect(director.debugSnapshot().mediaBridgeState).toBe("playing");
+    await director.dispose();
+    expect(context.events).toContain("bridge-dispose");
+  });
+
+  it("times out a WebKit resume that never settles", async () => {
+    const context = new FakeAudioContext("suspended", "pending");
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { activationTimeoutMs: 50 },
+    );
+
+    await expect(director.activate(enabled)).rejects.toThrow(
+      "Audio activation timed out",
+    );
+    await director.dispose();
   });
 
   it.each(["suspended", "interrupted"] as const)(
@@ -554,6 +680,8 @@ describe("AudioDirector lifecycle and budgets", () => {
     expect(director.state).toBe("suspended");
 
     await director.setHidden(false);
+    expect(director.activeVoiceCount).toBe(0);
+    await director.activate(enabled);
     expect(director.activeVoiceCount).toBe(4);
     await director.dispose();
     expect(director.activeVoiceCount).toBe(0);

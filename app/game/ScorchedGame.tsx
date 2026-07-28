@@ -3930,8 +3930,9 @@ export default function ScorchedGame() {
       return null;
     }
 
+    let audio: AudioDirector | null = null;
     try {
-      const audio =
+      audio =
         audioRef.current ??
         createAudioDirector(handleAudioContextState);
       if (!audio) {
@@ -3946,6 +3947,10 @@ export default function ScorchedGame() {
       audio.setMusicState(audioMusicState(game));
       audio.setPaused(game.paused);
       const activation = await audio.activate(game.audio);
+      if (audioRef.current !== audio) {
+        void audio.dispose().catch(() => undefined);
+        return null;
+      }
       const availabilityChanged = !game.audioAvailable;
       game.audioAvailable = true;
       game.audioDiagnostic = null;
@@ -3961,7 +3966,11 @@ export default function ScorchedGame() {
       }
       return audio;
     } catch (error) {
-      const failedAudio = audioRef.current;
+      const failedAudio = audio;
+      if (failedAudio && audioRef.current !== failedAudio) {
+        void failedAudio.dispose().catch(() => undefined);
+        return null;
+      }
       audioRef.current = null;
       game.audioAvailable = false;
       game.audioDiagnostic =
@@ -3998,7 +4007,9 @@ export default function ScorchedGame() {
       try {
         audio.play(event);
       } catch (error) {
-        audioRef.current = null;
+        if (audioRef.current === audio) {
+          audioRef.current = null;
+        }
         gameRef.current.audioAvailable = false;
         gameRef.current.audioDiagnostic =
           error instanceof Error
@@ -4815,13 +4826,22 @@ export default function ScorchedGame() {
           });
         return;
       }
-      void ensureAudio();
+      const game = gameRef.current;
+      if (
+        audioRef.current &&
+        (game.audio.musicEnabled || game.audio.sfxEnabled)
+      ) {
+        game.audioAvailable = false;
+        game.audioDiagnostic =
+          "После возврата на iPhone звук нужно восстановить прямым касанием.";
+        refresh();
+      }
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [ensureAudio, refresh]);
+  }, [refresh]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -5065,14 +5085,17 @@ export default function ScorchedGame() {
   }, [playUiAudio, updateAudioPreferences]);
 
   const retryAudio = useCallback(() => {
+    const previousAudio = audioRef.current;
+    audioRef.current = null;
+    void previousAudio?.dispose().catch(() => undefined);
     void ensureAudio().then((audio) => {
       audio?.play({
         type: "ui",
-        cue: "resume",
+        cue: "sound-check",
         seed: gameRef.current.seed + gameRef.current.turn,
       });
       if (audio) {
-        logAudioSmoke("retry-smoke", audio);
+        logAudioSmoke("sound-check-smoke", audio);
       }
     });
   }, [ensureAudio, logAudioSmoke]);
@@ -5118,6 +5141,39 @@ export default function ScorchedGame() {
   const interestPreview = calculateInterest(eligibleInterestBank);
   const audioSettings = (
     <div className={styles.audioSettings} aria-label="Настройки аудио">
+      {model.audioAvailable ? (
+        <div className={styles.audioTest}>
+          <button
+            type="button"
+            className={styles.audioTestButton}
+            onClick={retryAudio}
+            disabled={!model.audio.sfxEnabled}
+          >
+            Проверить звук
+          </button>
+          <p>
+            {model.audio.sfxEnabled
+              ? "На iPhone нажмите один раз: должен прозвучать высокий сигнал, затем начнётся музыка."
+              : "Сначала включите «Звуки», затем нажмите проверку."}
+          </p>
+        </div>
+      ) : (
+        <div className={styles.audioRecovery} aria-live="polite">
+          <p>
+            {model.audioDiagnostic ??
+              "Аудио недоступно в браузере."}
+          </p>
+          <button
+            type="button"
+            className={styles.audioUnavailable}
+            onClick={retryAudio}
+          >
+            {model.audio.sfxEnabled
+              ? "Перезапустить и проверить звук"
+              : "Перезапустить аудио"}
+          </button>
+        </div>
+      )}
       <div className={styles.audioToggleRow}>
         <button
           type="button"
@@ -5192,21 +5248,6 @@ export default function ScorchedGame() {
           aria-label="Громкость звуков"
         />
       </label>
-      {!model.audioAvailable && (
-        <div className={styles.audioRecovery} aria-live="polite">
-          <p>
-            {model.audioDiagnostic ??
-              "Аудио недоступно в браузере."}
-          </p>
-          <button
-            type="button"
-            className={styles.audioUnavailable}
-            onClick={retryAudio}
-          >
-            Повторно включить аудио
-          </button>
-        </div>
-      )}
     </div>
   );
 

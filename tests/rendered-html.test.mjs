@@ -40,6 +40,7 @@ test("server-renders the game shell and production metadata", async () => {
   assert.match(html, /ARTILLERY/);
   assert.match(html, /Локальный бой/);
   assert.match(html, /Поверните телефон/);
+  assert.match(html, /Проверить звук/);
   assert.match(
     html,
     /property="og:image" content="http:\/\/localhost:3000\/og-funky\.png"/i,

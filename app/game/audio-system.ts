@@ -35,8 +35,20 @@ export type RuntimeAudioContextState =
 export interface AudioActivationReport {
   readonly contextState: "running";
   readonly audioSessionType: string | null;
+  readonly outputRoute: AudioOutputRoute;
   readonly userActivationIsActive: boolean | null;
 }
+
+export type AudioOutputRoute =
+  | "audio-session"
+  | "media-element-fallback"
+  | "webaudio";
+
+export type AudioMediaBridgeState =
+  | "idle"
+  | "starting"
+  | "playing"
+  | "blocked";
 
 export interface AudioDebugSnapshot {
   readonly contextState: RuntimeAudioContextState;
@@ -45,6 +57,8 @@ export interface AudioDebugSnapshot {
   readonly activated: boolean;
   readonly audioSessionType: string | null;
   readonly audioSessionState: string | null;
+  readonly outputRoute: AudioOutputRoute;
+  readonly mediaBridgeState: AudioMediaBridgeState | null;
   readonly musicEnabled: boolean;
   readonly sfxEnabled: boolean;
   readonly musicVolume: number;
@@ -73,13 +87,119 @@ export class AudioActivationError extends Error {
 interface AudioSessionLike {
   type: string;
   readonly state?: string;
+  addEventListener?(
+    type: "statechange",
+    listener: EventListenerOrEventListenerObject,
+  ): void;
+  removeEventListener?(
+    type: "statechange",
+    listener: EventListenerOrEventListenerObject,
+  ): void;
 }
 
 interface NavigatorWithAudioSession {
   readonly audioSession?: AudioSessionLike;
+  readonly maxTouchPoints?: number;
+  readonly platform?: string;
+  readonly userAgent?: string;
   readonly userActivation?: {
     readonly isActive: boolean;
   };
+}
+
+export interface AudioMediaBridge {
+  readonly state: AudioMediaBridgeState;
+  start(): Promise<void>;
+  pause(): void;
+  dispose(): void;
+}
+
+export interface AudioDirectorOptions {
+  readonly activationTimeoutMs?: number;
+  readonly audioSession?: AudioSessionLike | null;
+  readonly mediaBridge?: AudioMediaBridge | null;
+  readonly outputRoute?: AudioOutputRoute;
+}
+
+const DEFAULT_ACTIVATION_TIMEOUT_MS = 1_800;
+
+// A 50 ms, mono PCM WAV whose samples alternate between ±1 at 16-bit depth.
+// It is effectively inaudible, but remains non-zero so WebKit treats the
+// HTMLMediaElement as a real media route instead of optimizing it away.
+const IOS_MEDIA_BRIDGE_WAV =
+  "data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAABAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//wEA//8BAP//AQD//w==";
+
+class HtmlMediaAudioBridge implements AudioMediaBridge {
+  private bridgeState: AudioMediaBridgeState = "idle";
+
+  public constructor(private readonly element: HTMLAudioElement) {}
+
+  public get state(): AudioMediaBridgeState {
+    return this.bridgeState;
+  }
+
+  public async start(): Promise<void> {
+    if (!this.element.paused && !this.element.ended) {
+      this.bridgeState = "playing";
+      return;
+    }
+    this.bridgeState = "starting";
+    try {
+      await this.element.play();
+      if (this.element.paused) {
+        throw new Error("HTML media playback remained paused.");
+      }
+      this.bridgeState = "playing";
+    } catch (error) {
+      this.bridgeState = "blocked";
+      throw error;
+    }
+  }
+
+  public pause(): void {
+    this.element.pause();
+    this.bridgeState = "idle";
+  }
+
+  public dispose(): void {
+    this.pause();
+    this.element.removeAttribute("src");
+    this.element.remove();
+  }
+}
+
+export function isAppleMobileWebKit(
+  navigatorLike: NavigatorWithAudioSession | null,
+): boolean {
+  if (!navigatorLike) {
+    return false;
+  }
+  const userAgent = navigatorLike.userAgent ?? "";
+  const nativeIos = /\b(iPad|iPhone|iPod)\b/i.test(userAgent);
+  const touchIpad =
+    navigatorLike.platform === "MacIntel" &&
+    (navigatorLike.maxTouchPoints ?? 0) > 1;
+  return nativeIos || touchIpad;
+}
+
+function createMediaAudioBridge(): AudioMediaBridge | null {
+  if (
+    typeof document === "undefined" ||
+    typeof navigator === "undefined" ||
+    !isAppleMobileWebKit(navigator as NavigatorWithAudioSession)
+  ) {
+    return null;
+  }
+  const element = document.createElement("audio");
+  element.src = IOS_MEDIA_BRIDGE_WAV;
+  element.loop = true;
+  element.preload = "auto";
+  element.volume = 1;
+  element.setAttribute("playsinline", "");
+  element.setAttribute("aria-hidden", "true");
+  element.style.display = "none";
+  document.body.appendChild(element);
+  return new HtmlMediaAudioBridge(element);
 }
 
 export function configurePlaybackAudioSession(
@@ -94,7 +214,7 @@ export function configurePlaybackAudioSession(
   }
   try {
     session.type = "playback";
-    return session.type;
+    return session.type === "playback" ? session.type : null;
   } catch {
     return null;
   }
@@ -468,6 +588,7 @@ export type SfxBus = "weapon" | "shieldArmor" | "impactTerrain" | "ui";
 export type UiAudioCue =
   | "mode-select"
   | "match-start"
+  | "sound-check"
   | "weapon-select"
   | "shield-select"
   | "selector-open"
@@ -570,6 +691,7 @@ const UI_CUES: Readonly<
 > = Object.freeze({
   "mode-select": [360, 510, 120, "triangle", 4],
   "match-start": [220, 660, 280, "triangle", 8],
+  "sound-check": [880, 1_320, 360, "triangle", 10],
   "weapon-select": [420, 620, 90, "sine", 4],
   "shield-select": [310, 760, 150, "triangle", 5],
   "selector-open": [260, 420, 100, "sine", 3],
@@ -632,12 +754,12 @@ const SHIELD_ID_OFFSETS: Readonly<Record<ShieldId, number>> = Object.freeze({
 const MUSIC_CHORDS: Readonly<
   Record<MusicState, readonly [number, number, number, number]>
 > = Object.freeze({
-  intro: [82.41, 123.47, 164.81, 246.94],
-  aiming: [73.42, 110, 146.83, 220],
-  flight: [65.41, 98, 130.81, 196],
-  shop: [87.31, 130.81, 174.61, 261.63],
-  "round-result": [98, 146.83, 196, 293.66],
-  "match-end": [73.42, 110, 164.81, 246.94],
+  intro: [164.81, 246.94, 329.63, 493.88],
+  aiming: [146.83, 220, 293.66, 440],
+  flight: [130.81, 196, 261.63, 392],
+  shop: [174.61, 261.63, 349.23, 523.25],
+  "round-result": [196, 293.66, 392, 587.33],
+  "match-end": [146.83, 220, 329.63, 493.88],
 });
 
 export const MUSIC_TEMPO_BPM: Readonly<Record<MusicState, number>> =
@@ -691,10 +813,9 @@ function capVoices(
 
 function timelinePlan(
   event: Extract<GameAudioEvent, { type: "weapon-timeline" }>,
-  preferences: AudioPreferences,
 ): AudioPlan {
   const profile = getSoundProfile(event.weaponId);
-  const volume = preferences.sfxVolume / 100;
+  const volume = 1;
   const variation = (seededUnit(event.seed, 1) - 0.5) * 0.08;
   const pan = normalizedPan(event.pan);
   const voices: AudioVoicePlan[] = [
@@ -865,10 +986,9 @@ function shieldVoice(
 
 function resolutionPlan(
   event: Extract<GameAudioEvent, { type: "resolution" }>,
-  preferences: AudioPreferences,
 ): AudioPlan {
   const profile = getSoundProfile(event.weaponId);
-  const volume = preferences.sfxVolume / 100;
+  const volume = 1;
   const pan = normalizedPan(event.pan);
   const [materialFrequency, materialDuration, materialWave] =
     MATERIAL_CUES[event.material];
@@ -1022,10 +1142,9 @@ function resolutionPlan(
 
 function uiPlan(
   event: Extract<GameAudioEvent, { type: "ui" }>,
-  preferences: AudioPreferences,
 ): AudioPlan {
   const [start, end, durationMs, wave, priority] = UI_CUES[event.cue];
-  const volume = preferences.sfxVolume / 100;
+  const volume = 1;
   const variation =
     ((seededUnit(event.seed ?? 1, event.cue.length) - 0.5) * 18) | 0;
   return {
@@ -1039,7 +1158,12 @@ function uiPlan(
           frequencyHz: start + variation,
           endFrequencyHz: end + variation,
           wave,
-          gain: event.cue === "unavailable" ? 0.065 : 0.048,
+          gain:
+            event.cue === "sound-check"
+              ? 0.11
+              : event.cue === "unavailable"
+                ? 0.072
+                : 0.055,
           pan: normalizedPan(event.pan),
           priority: priority + 78,
         },
@@ -1053,10 +1177,9 @@ function uiPlan(
 
 function musicPreviewPlan(
   state: MusicState,
-  preferences: AudioPreferences,
 ): AudioPlan {
   const chord = MUSIC_CHORDS[state];
-  const volume = preferences.musicVolume / 100;
+  const volume = 1;
   return {
     voices: chord.map((frequency, index) =>
       voice(
@@ -1068,7 +1191,7 @@ function musicPreviewPlan(
           frequencyHz: frequency,
           endFrequencyHz: frequency * (index % 2 === 0 ? 1.004 : 0.996),
           wave: index < 2 ? "sine" : "triangle",
-          gain: 0.018 / (index + 1),
+          gain: 0.04 / Math.sqrt(index + 1),
           pan: (index - 1.5) * 0.18,
           priority: 20,
         },
@@ -1087,19 +1210,19 @@ export function audioPlanForEvent(
   const preferences = normalizeAudioPreferences(preferencesInput);
   if (event.type === "music") {
     return preferences.musicEnabled
-      ? musicPreviewPlan(event.state, preferences)
+      ? musicPreviewPlan(event.state)
       : EMPTY_AUDIO_PLAN;
   }
   if (!preferences.sfxEnabled) {
     return EMPTY_AUDIO_PLAN;
   }
   if (event.type === "weapon-timeline") {
-    return timelinePlan(event, preferences);
+    return timelinePlan(event);
   }
   if (event.type === "resolution") {
-    return resolutionPlan(event, preferences);
+    return resolutionPlan(event);
   }
-  return uiPlan(event, preferences);
+  return uiPlan(event);
 }
 
 interface ActiveVoice {
@@ -1143,8 +1266,13 @@ export class AudioDirector {
   private readonly duckGain: GainNode;
   private readonly sfxGain: GainNode;
   private readonly busGains: Readonly<Record<SfxBus, GainNode>>;
+  private readonly audioSession: AudioSessionLike | null;
+  private readonly mediaBridge: AudioMediaBridge | null;
+  private readonly outputRoute: AudioOutputRoute;
+  private readonly activationTimeoutMs: number;
   private readonly activeVoices = new Map<number, ActiveVoice>();
   private musicVoices: MusicVoice[] = [];
+  private activationPromise: Promise<AudioActivationReport> | null = null;
   private settings: AudioPreferences = { ...DEFAULT_AUDIO_PREFERENCES };
   private musicState: MusicState = "intro";
   private nextVoiceId = 1;
@@ -1160,9 +1288,17 @@ export class AudioDirector {
     onContextStateChange: (
       state: RuntimeAudioContextState,
     ) => void = () => undefined,
+    options: AudioDirectorOptions = {},
   ) {
     this.context = context;
     this.onContextStateChange = onContextStateChange;
+    this.audioSession = options.audioSession ?? null;
+    this.mediaBridge = options.mediaBridge ?? null;
+    this.outputRoute = options.outputRoute ?? "webaudio";
+    this.activationTimeoutMs = Math.max(
+      50,
+      options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS,
+    );
     this.master = context.createGain();
     this.compressor = context.createDynamicsCompressor();
     this.musicGain = context.createGain();
@@ -1175,7 +1311,7 @@ export class AudioDirector {
       ui: context.createGain(),
     };
 
-    this.master.gain.value = 0.72;
+    this.master.gain.value = 0.78;
     this.musicGain.gain.value = 0;
     this.duckGain.gain.value = 1;
     this.sfxGain.gain.value = 0;
@@ -1197,6 +1333,10 @@ export class AudioDirector {
       "statechange",
       this.handleContextStateChange,
     );
+    this.audioSession?.addEventListener?.(
+      "statechange",
+      this.handleAudioSessionStateChange,
+    );
   }
 
   public get state(): RuntimeAudioContextState {
@@ -1208,17 +1348,15 @@ export class AudioDirector {
   }
 
   public debugSnapshot(): AudioDebugSnapshot {
-    const audioSession =
-      typeof navigator === "undefined"
-        ? null
-        : (navigator as NavigatorWithAudioSession).audioSession ?? null;
     return {
       contextState: this.state,
       currentTime: this.context.currentTime,
       activeVoiceCount: this.activeVoiceCount,
       activated: this.activated,
-      audioSessionType: audioSession?.type ?? null,
-      audioSessionState: audioSession?.state ?? null,
+      audioSessionType: this.audioSession?.type ?? null,
+      audioSessionState: this.audioSession?.state ?? null,
+      outputRoute: this.outputRoute,
+      mediaBridgeState: this.mediaBridge?.state ?? null,
       musicEnabled: this.settings.musicEnabled,
       sfxEnabled: this.settings.sfxEnabled,
       musicVolume: this.settings.musicVolume,
@@ -1263,23 +1401,69 @@ export class AudioDirector {
         this.state,
       );
     }
+    if (this.activationPromise) {
+      return this.activationPromise;
+    }
+    const activation = this.activateFromGesture();
+    this.activationPromise = activation;
+    try {
+      return await activation;
+    } finally {
+      if (this.activationPromise === activation) {
+        this.activationPromise = null;
+      }
+    }
+  }
+
+  private async activateFromGesture(): Promise<AudioActivationReport> {
     const userActivationIsActive =
       typeof navigator === "undefined"
         ? null
         : (navigator as NavigatorWithAudioSession).userActivation
             ?.isActive ?? null;
+    const audioSessionType = this.audioSession
+      ? configurePlaybackAudioSession({
+          audioSession: this.audioSession,
+        })
+      : configurePlaybackAudioSession();
+
+    if (
+      this.activated &&
+      !this.hidden &&
+      this.state === "running" &&
+      (!this.mediaBridge || this.mediaBridge.state === "playing")
+    ) {
+      this.applySettings();
+      this.ensureMusic();
+      return {
+        contextState: "running",
+        audioSessionType,
+        outputRoute: this.outputRoute,
+        userActivationIsActive,
+      };
+    }
+
     const needsLivenessCheck =
       !this.activated || this.hidden || this.state !== "running";
-    if (this.state !== "running") {
-      await this.context.resume();
+
+    // Both calls happen synchronously before the first await. This preserves
+    // the direct tap/click relationship required by mobile WebKit.
+    this.primeOutput();
+    const activationSteps: Promise<unknown>[] = [];
+    if (this.mediaBridge) {
+      activationSteps.push(this.mediaBridge.start());
     }
+    if (this.state !== "running") {
+      activationSteps.push(this.context.resume());
+    }
+    await this.withActivationTimeout(Promise.all(activationSteps));
+
     if (this.state !== "running") {
       throw new AudioActivationError(
         `AudioContext resume completed without reaching running state (state: ${this.state}).`,
         this.state,
       );
     }
-    this.primeOutput();
     this.activated = true;
     this.hidden = false;
     this.applySettings();
@@ -1289,7 +1473,8 @@ export class AudioDirector {
     }
     return {
       contextState: "running",
-      audioSessionType: configurePlaybackAudioSession(),
+      audioSessionType,
+      outputRoute: this.outputRoute,
       userActivationIsActive,
     };
   }
@@ -1301,6 +1486,9 @@ export class AudioDirector {
     }
     if (!this.settings.musicEnabled) {
       this.stopMusic();
+    }
+    if (!this.settings.musicEnabled && !this.settings.sfxEnabled) {
+      this.mediaBridge?.pause();
     }
     this.applySettings();
     if (this.activated) {
@@ -1346,14 +1534,15 @@ export class AudioDirector {
     if (hidden) {
       this.cancelSfx();
       this.stopMusic();
+      this.mediaBridge?.pause();
+      this.primed = false;
       if (this.context.state === "running") {
         await this.context.suspend();
       }
       return;
     }
-    if (this.activated) {
-      await this.activate(this.settings);
-    }
+    // Returning from the background requires a new direct user gesture on
+    // iOS. The UI exposes Retry/Resume instead of claiming an automatic fix.
   }
 
   public play(event: GameAudioEvent): AudioPlan {
@@ -1405,6 +1594,11 @@ export class AudioDirector {
       "statechange",
       this.handleContextStateChange,
     );
+    this.audioSession?.removeEventListener?.(
+      "statechange",
+      this.handleAudioSessionStateChange,
+    );
+    this.mediaBridge?.dispose();
     this.cancelAll();
     [
       ...Object.values(this.busGains),
@@ -1465,14 +1659,14 @@ export class AudioDirector {
 
       source.type = index < 2 ? "sine" : "triangle";
       source.frequency.value = frequency;
-      gain.gain.value = 0.018 / (index + 1);
+      gain.gain.value = 0.04 / Math.sqrt(index + 1);
       detuneLfo.type = "sine";
       detuneLfo.frequency.value = 0.012 + index * 0.007;
       detuneLfoGain.gain.value = 3.5 + index * 1.25;
       pulseLfo.type = "sine";
       pulseLfo.frequency.value =
         MUSIC_TEMPO_BPM[this.musicState] / 60;
-      pulseLfoGain.gain.value = 0.0025 / (index + 1);
+      pulseLfoGain.gain.value = 0.004 / Math.sqrt(index + 1);
 
       detuneLfo.connect(detuneLfoGain);
       detuneLfoGain.connect(source.detune);
@@ -1626,22 +1820,64 @@ export class AudioDirector {
     this.onContextStateChange?.(state);
   };
 
+  private readonly handleAudioSessionStateChange = (): void => {
+    if (this.audioSession?.state !== "interrupted") {
+      return;
+    }
+    this.activated = false;
+    this.primed = false;
+    this.cancelSfx();
+    this.stopMusic();
+    this.onContextStateChange?.("interrupted");
+  };
+
   private primeOutput(): void {
     if (this.primed) {
       return;
     }
     this.primed = true;
-    const source = this.context.createBufferSource();
-    source.buffer = this.context.createBuffer(
-      1,
-      1,
-      this.context.sampleRate,
-    );
-    source.connect(this.master);
+    const now = this.context.currentTime;
+    const source = this.context.createOscillator();
+    const gain = this.context.createGain();
+    source.type = "sine";
+    source.frequency.setValueAtTime(880, now);
+    source.frequency.exponentialRampToValueAtTime(1_320, now + 0.055);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.035, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+    source.connect(gain);
+    gain.connect(this.master);
     source.onended = () => {
       source.disconnect();
+      gain.disconnect();
     };
-    source.start();
+    source.start(now);
+    source.stop(now + 0.065);
+  }
+
+  private async withActivationTimeout<T>(
+    operation: Promise<T>,
+  ): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(
+              new AudioActivationError(
+                `Audio activation timed out after ${this.activationTimeoutMs} ms.`,
+                this.state,
+              ),
+            );
+          }, this.activationTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   private async verifyClockIsAdvancing(): Promise<void> {
@@ -1667,7 +1903,14 @@ export function createAudioDirector(
   if (typeof window === "undefined") {
     return null;
   }
-  configurePlaybackAudioSession();
+  const navigatorWithAudioSession =
+    typeof navigator === "undefined"
+      ? null
+      : (navigator as NavigatorWithAudioSession);
+  const audioSession = navigatorWithAudioSession?.audioSession ?? null;
+  const playbackSessionType = configurePlaybackAudioSession(
+    navigatorWithAudioSession,
+  );
   const AudioContextConstructor =
     window.AudioContext ??
     (
@@ -1678,9 +1921,22 @@ export function createAudioDirector(
   if (!AudioContextConstructor) {
     return null;
   }
+  const mediaBridge =
+    playbackSessionType === "playback" ? null : createMediaAudioBridge();
+  const outputRoute: AudioOutputRoute =
+    playbackSessionType === "playback"
+      ? "audio-session"
+      : mediaBridge
+        ? "media-element-fallback"
+        : "webaudio";
   return new AudioDirector(
     new AudioContextConstructor(),
     onContextStateChange,
+    {
+      audioSession,
+      mediaBridge,
+      outputRoute,
+    },
   );
 }
 
