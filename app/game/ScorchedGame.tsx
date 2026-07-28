@@ -14,6 +14,8 @@ import {
   VIEWPORT_WIDTH,
   WORLD_WIDTH,
   DEFAULT_DEMO_MATCH_MODE,
+  airburstImpactPlan,
+  airburstPayloadProfile,
   availableSelectedWeapon,
   applyInterest,
   calculateInterest,
@@ -26,6 +28,8 @@ import {
   isExperimentalUltimateId,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
+  leapFrogImpactPlan,
+  leapFrogImpactProfiles,
   nextPlayerIndex,
   purchaseWeapon,
   quoteWeaponPurchase,
@@ -54,6 +58,7 @@ import {
   type TrajectoryPoint,
   type Vector2,
   type WeaponEffectProfile,
+  type WeaponFamily,
   type WeaponId,
 } from "@/lib/game";
 import {
@@ -111,6 +116,7 @@ import {
   nextWeaponFocus,
   weaponAmmoCount,
   weaponCategoryLabel,
+  weaponMechanicLabel,
   weaponsForSelectorFilter,
   type WeaponSelectorFilterId,
 } from "./weapon-selector";
@@ -194,6 +200,7 @@ const DEMO_BEHAVIORS: Record<WeaponId, DemoBehavior> = {
 
 type ArsenalFilter =
   | "all"
+  | "heavy"
   | "blast"
   | "payload"
   | "terrain-cut"
@@ -203,9 +210,15 @@ type ArsenalFilter =
 const ARSENAL_FILTERS: readonly {
   readonly id: ArsenalFilter;
   readonly label: string;
-  readonly matches: readonly DemoBehaviorKind[];
+  readonly matches?: readonly DemoBehaviorKind[];
+  readonly families?: readonly WeaponFamily[];
 }[] = [
-  { id: "all", label: "Все 33", matches: [] },
+  { id: "all", label: "Все 33" },
+  {
+    id: "heavy",
+    label: "Тяжёлое",
+    families: ["nuclear", "cluster"],
+  },
   {
     id: "blast",
     label: "Взрывы",
@@ -940,8 +953,12 @@ function buildShot(
   }
 
   if (behavior.kind === "airburst") {
+    if (weaponId !== "mirv" && weaponId !== "deathsHead") {
+      throw new Error(`Unsupported airburst payload: ${weaponId}`);
+    }
     const apexIndex = trajectoryApexIndex(trajectory);
-    const childCount = weaponId === "deathsHead" ? 9 : 5;
+    const payload = airburstPayloadProfile(weaponId);
+    const childCount = payload.childCount;
 
     if (apexIndex === null) {
       segments.push({
@@ -1755,16 +1772,21 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "leap-frog") {
-    shot.impactPoints.forEach((point, index) => {
-      const multiplier = [0.68, 0.84, 1][index] ?? 1;
-      const radius = Math.max(8, resolution.radius * multiplier);
-      includeEdit(model.terrain.carveCircle(point.x, point.y, radius));
+    leapFrogImpactPlan(shot.impactPoints).forEach((impact) => {
+      const radius = Math.max(8, impact.radius);
+      includeEdit(
+        model.terrain.carveCircle(
+          impact.point.x,
+          impact.point.y,
+          radius,
+        ),
+      );
       explosionDamage(
         model,
         shot.owner,
-        point,
+        impact.point,
         radius,
-        resolution.damage * multiplier,
+        impact.damage,
       );
     });
     terrainChanged = true;
@@ -1795,23 +1817,26 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "airburst") {
-    const perWarheadDamage =
-      resolution.damage /
-      Math.max(1.6, Math.sqrt(Math.max(1, shot.impactPoints.length)));
-    shot.impactPoints.forEach((point) => {
+    if (
+      shot.weaponId !== "mirv" &&
+      shot.weaponId !== "deathsHead"
+    ) {
+      throw new Error(`Unsupported airburst payload: ${shot.weaponId}`);
+    }
+    airburstImpactPlan(shot.weaponId, shot.impactPoints).forEach((impact) => {
       includeEdit(
         model.terrain.carveCircle(
-          point.x,
-          point.y,
-          resolution.radius,
+          impact.point.x,
+          impact.point.y,
+          impact.radius,
         ),
       );
       explosionDamage(
         model,
         shot.owner,
-        point,
-        resolution.radius + 2,
-        perWarheadDamage,
+        impact.point,
+        impact.radius + 2,
+        impact.damage,
       );
     });
     terrainChanged = shot.impactPoints.length > 0;
@@ -3091,14 +3116,15 @@ function drawProjectile(
     context.closePath();
     context.fill();
   } else {
-    const radius =
-      segment.style === "napalm"
-        ? 6
-        : segment.style === "dirt"
-          ? 6
-          : segment.style === "funky"
-            ? 5
-            : 4;
+    let radius = 4;
+    if (segment.style === "napalm" || segment.style === "dirt") {
+      radius = 6;
+    } else if (segment.style === "funky") {
+      radius = 5;
+    } else if (segment.style === "cluster-child") {
+      radius =
+        weaponId === "deathsHead" ? 6 : weaponId === "mirv" ? 5 : 4;
+    }
     context.beginPath();
     context.arc(point.x, point.y, radius, 0, Math.PI * 2);
     context.fill();
@@ -3262,10 +3288,33 @@ function drawImpactEnvelopes(
     if (local <= 0 || local >= 1) {
       return;
     }
+    const impactRadius =
+      shot.weaponId === "leapFrog"
+        ? (leapFrogImpactProfiles()[sourceIndex]?.radius ??
+          profile.mechanicalRadius)
+        : shot.weaponId === "mirv" || shot.weaponId === "deathsHead"
+          ? airburstPayloadProfile(shot.weaponId).warheadRadius
+          : profile.mechanicalRadius;
+    const impactScale =
+      profile.mechanicalRadius > 0
+        ? impactRadius / profile.mechanicalRadius
+        : 1;
+    const impactProfile =
+      impactRadius === profile.mechanicalRadius
+        ? profile
+        : {
+            ...profile,
+            mechanicalRadius: impactRadius,
+            readableRadius: impactRadius,
+            spectacleRadius: Math.max(
+              impactRadius,
+              profile.spectacleRadius * impactScale,
+            ),
+          };
     drawRadialImpactEnvelope(
       context,
       point,
-      profile,
+      impactProfile,
       weapon,
       local,
       effectLevel,
@@ -4389,7 +4438,7 @@ export default function ScorchedGame() {
         name: selectedWeaponDefinition.name,
         icon: selectedWeaponDefinition.icon,
         accent: selectedWeaponDefinition.accent,
-        role: weaponCategoryLabel(selectedWeaponDefinition.category),
+        role: weaponMechanicLabel(selectedWeaponDefinition),
         stock: infiniteArsenal
           ? "∞ showcase"
           : selectedWeaponDefinition.ammo.kind === "unlimited"
@@ -5944,9 +5993,11 @@ export default function ScorchedGame() {
   const filteredWeapons = WEAPONS.filter(
     (weapon) =>
       activeFilterDefinition?.id === "all" ||
-      activeFilterDefinition?.matches.includes(
+      (activeFilterDefinition?.families?.includes(weapon.family) ?? false) ||
+      (activeFilterDefinition?.matches?.includes(
         DEMO_BEHAVIORS[weapon.id].kind,
-      ),
+      ) ??
+        false),
   );
   const eligibleInterestBank = shopTank.credits;
   const interestPreview = calculateInterest(eligibleInterestBank);
@@ -6353,7 +6404,7 @@ export default function ScorchedGame() {
               aria-expanded={weaponSelectorOpen}
               aria-controls="weapon-selector-dialog"
               data-game-keyboard-owner="aiming"
-              aria-label={`Открыть арсенал: ${selectedPlayable.name}, ${selectedPlayable.stock}`}
+              aria-label={`Открыть арсенал: ${selectedPlayable.name}, ${selectedPlayable.role}, ${selectedPlayable.stock}`}
             >
               <span className={styles.weaponTriggerIcon} aria-hidden="true">
                 {selectedPlayable.icon}
@@ -6444,6 +6495,11 @@ export default function ScorchedGame() {
             <div>
               <p className={styles.weaponDialogEyebrow}>Arsenal Deck</p>
               <h2 id="weapon-selector-title">Выберите оружие</h2>
+              <span className={styles.weaponDialogInventoryHint}>
+                {infiniteArsenal
+                  ? "33 без лимита + 10 showcase · листайте ↓"
+                  : "33 оружия · по 1 заряду · листайте ↓"}
+              </span>
               <p>
                 {infiniteArsenal
                   ? "Канонические 33 + отдельные Experimental 10 · стрелки и Enter"
@@ -6493,6 +6549,7 @@ export default function ScorchedGame() {
             onKeyDown={handleWeaponGridKeyDown}
           >
             {selectorWeapons.map((weapon) => {
+              const mechanicLabel = weaponMechanicLabel(weapon);
               const ammo = weaponAmmo(activeTank, weapon.id);
               const available = canUseWeapon(
                 model,
@@ -6529,10 +6586,10 @@ export default function ScorchedGame() {
                   style={weaponStyle(weapon.accent)}
                   aria-selected={selected}
                   aria-disabled={!available}
-                  aria-label={`${weapon.name}, ${weaponCategoryLabel(
+                  aria-label={`${weapon.name}, ${mechanicLabel}, ${weaponCategoryLabel(
                     weapon.category,
                   )}, ${accessibleStatus}`}
-                  title={weapon.description}
+                  title={`${mechanicLabel}. ${weapon.description}`}
                   onClick={() => {
                     if (available) {
                       selectWeaponFromSelector(weapon.id);
@@ -6548,7 +6605,7 @@ export default function ScorchedGame() {
                     </span>
                     <span className={styles.weaponOptionTitle}>
                       <strong>{weapon.shortName}</strong>
-                      <span>{weaponCategoryLabel(weapon.category)}</span>
+                      <span>{mechanicLabel}</span>
                     </span>
                   </span>
                   <span className={styles.weaponOptionDescription}>
@@ -7034,7 +7091,7 @@ export default function ScorchedGame() {
                           {weapon.name}
                         </span>
                         <span className={styles.shopCardFamily}>
-                          {weapon.family}
+                          {weaponMechanicLabel(weapon)}
                         </span>
                       </span>
                     </div>

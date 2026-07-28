@@ -4,11 +4,13 @@ import {
   type Inventory,
   type WeaponCategory,
   type WeaponDefinition,
+  type WeaponFamily,
   type WeaponId,
 } from "../../lib/game";
 
 export type WeaponSelectorFilterId =
   | "all"
+  | "heavy"
   | "strike"
   | "terrain-destruction"
   | "terrain-creation"
@@ -20,10 +22,17 @@ interface WeaponSelectorFilter {
   readonly id: WeaponSelectorFilterId;
   readonly label: string;
   readonly categories: readonly WeaponCategory[] | null;
+  readonly families?: readonly WeaponFamily[];
 }
 
 export const WEAPON_SELECTOR_FILTERS: readonly WeaponSelectorFilter[] = [
   { id: "all", label: "Все 33", categories: null },
+  {
+    id: "heavy",
+    label: "Тяжёлое",
+    categories: null,
+    families: ["nuclear", "cluster"],
+  },
   {
     id: "strike",
     label: "Удар",
@@ -57,6 +66,70 @@ export function weaponCategoryLabel(category: WeaponCategory): string {
   return CATEGORY_LABELS[category];
 }
 
+/**
+ * Коротко объясняет механику публичными названиями проекта. Classic catalog
+ * labels намеренно не используются: это presentation copy, а не справочник.
+ */
+export function weaponMechanicLabel(weapon: WeaponDefinition): string {
+  switch (weapon.id) {
+    case "babyNuke":
+      return "Малый ядерный заряд";
+    case "nuke":
+      return "Большой ядерный заряд";
+    case "leapFrog":
+      return "3 последовательных удара";
+    case "funkyBomb":
+      return "Цепь 10–14 взрывов (demo)";
+    case "mirv":
+      return "Раскрытие в апогее ×5";
+    case "deathsHead":
+      return "Тяжёлый каскад ×9";
+  }
+
+  const countSuffix =
+    weapon.demoResolution.count > 1
+      ? ` ×${weapon.demoResolution.count}`
+      : "";
+
+  switch (weapon.delivery) {
+    case "ballistic-sequence":
+      return `Последовательные удары${countSuffix}`;
+    case "airburst-cluster":
+      return `Воздушный каскад${countSuffix}`;
+    case "rolling":
+      return "Катящийся заряд";
+    case "subterranean":
+      return "Подземный удар";
+    case "subterranean-cluster":
+      return `Подземный каскад${countSuffix}`;
+    case "liquid":
+      return weapon.effectKind === "surface-fire"
+        ? `Огненный поток${countSuffix}`
+        : `Текучий грунт${countSuffix}`;
+    case "tank-mounted":
+      return weapon.effectKind === "terrain-fill"
+        ? "Грунт перед танком"
+        : "Расчистка перед танком";
+    case "radial":
+      return weapon.effectKind === "energy-blast"
+        ? "Энергетический импульс"
+        : "Осаждение грунта";
+    case "beam":
+      return "Прямой энергетический луч";
+    case "ballistic":
+      switch (weapon.effectKind) {
+        case "trace":
+          return "Безвредная пристрелка";
+        case "terrain-carve":
+          return "Разрушение грунта";
+        case "terrain-fill":
+          return "Создание грунта";
+        default:
+          return "Одиночный взрыв";
+      }
+  }
+}
+
 export function weaponsForSelectorFilter(
   filterId: WeaponSelectorFilterId,
   weapons: readonly WeaponDefinition[] = WEAPONS,
@@ -64,6 +137,10 @@ export function weaponsForSelectorFilter(
   const filter =
     WEAPON_SELECTOR_FILTERS.find((candidate) => candidate.id === filterId) ??
     WEAPON_SELECTOR_FILTERS[0];
+
+  if (filter.families !== undefined) {
+    return weapons.filter((weapon) => filter.families?.includes(weapon.family));
+  }
 
   if (filter.categories === null) {
     return weapons;

@@ -62,14 +62,18 @@ Seed определяет число, позиции и порядок chain nod
 - Leap Frog последовательно применяет multipliers `0.68`, `0.84`, `1`;
 - Funky делит source damage на
   `max(2.8, sqrt(nodeCount))` и добавляет повторяемый четырёхшаговый wobble;
-- MIRV/Death Crown делят damage на
-  `max(1.6, sqrt(childCount))`;
+- MIRV создаёт пять отдельных Missile-equivalent impact profiles
+  `radius = 34`, `damage = 34`;
+- каждая из девяти Death Crown warheads использует собственный provisional
+  profile `radius = 52`, `damage = 48`, без деления общего damage;
 - Napalm использует расстояние до ближайшего flow point;
 - Sandhog endpoints обходят shield на `82%`, laser — на `100%`;
 - остальные profiles читают provisional `demoResolution.damage` и собственную
   геометрию behavior;
-- release 0.1 расширяет только spatial reach по семейной шкале `1.0–1.8×`;
-  center damage, falloff, payload count, цены и bundle sizes не меняются.
+- release 0.1 расширяет spatial reach по семейной шкале `1.0–1.8×`; уточнение
+  per-warhead semantics составных payload принято отдельно в
+  [ADR 0005](decisions/0005-composite-payload-resolution.md). Canonical damage
+  formulas по-прежнему неизвестны.
 
 ## Effect envelopes
 

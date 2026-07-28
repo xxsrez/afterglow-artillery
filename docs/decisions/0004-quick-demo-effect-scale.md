@@ -3,6 +3,8 @@
 - **Статус:** принято
 - **Дата:** 2026-07-28
 - **Область:** release 0.1, все 33 weapons
+- **Уточнение:** per-warhead damage и индивидуальные boundaries составных
+  payload приняты позднее в [ADR 0005](0005-composite-payload-resolution.md)
 
 ## Контекст
 
@@ -76,7 +78,8 @@ Manual хранит canonical `blastRadius`, но не публикует damage
 
 1. Source-backed `blastRadius`, prices, bundle sizes и Arms level не менять.
 2. Сохранить `demoResolution.damage`, payload count и существующий falloff.
-   Расширять только spatial reach и terrain operation.
+   Расширять только spatial reach и terrain operation. Для составных payload
+   смысл `damage` как per-warhead значения позднее уточнён ADR 0005.
 3. Хранить все 33 профиля явно в `lib/game/effect-profiles.ts`; не выводить
    масштаб из цены или Arms level.
 4. Mechanical boundary рисовать сплошной окружностью с геометрическими ticks.

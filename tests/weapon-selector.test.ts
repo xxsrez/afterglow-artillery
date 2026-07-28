@@ -6,9 +6,10 @@ import {
   isWeaponSelectable,
   nextWeaponFocus,
   weaponAmmoCount,
+  weaponMechanicLabel,
   weaponsForSelectorFilter,
 } from "../app/game/weapon-selector";
-import { WEAPONS, WEAPON_IDS } from "../lib/game";
+import { getWeapon, WEAPONS, WEAPON_IDS } from "../lib/game";
 
 describe("weapon selector", () => {
   it("keeps all 33 weapons in canonical order with the baseline first", () => {
@@ -21,7 +22,7 @@ describe("weapon selector", () => {
 
   it("groups every weapon into exactly one visible mechanical category", () => {
     const groupedIds = WEAPON_SELECTOR_FILTERS.filter(
-      ({ id }) => id !== "all" && id !== "experimental",
+      ({ id }) => id !== "all" && id !== "heavy" && id !== "experimental",
     ).flatMap(({ id }) =>
       weaponsForSelectorFilter(id).map(({ id: weaponId }) => weaponId),
     );
@@ -29,6 +30,40 @@ describe("weapon selector", () => {
     expect(groupedIds).toHaveLength(WEAPONS.length);
     expect(new Set(groupedIds)).toEqual(new Set(WEAPON_IDS));
     expect(weaponsForSelectorFilter("experimental")).toEqual([]);
+  });
+
+  it("spotlights the six nuclear and composite heavy weapons", () => {
+    expect(
+      weaponsForSelectorFilter("heavy").map(({ id }) => id),
+    ).toEqual([
+      "babyNuke",
+      "nuke",
+      "leapFrog",
+      "funkyBomb",
+      "mirv",
+      "deathsHead",
+    ]);
+  });
+
+  it("describes heavy mechanics without exposing classic catalog labels", () => {
+    expect(weaponMechanicLabel(getWeapon("babyNuke"))).toBe(
+      "Малый ядерный заряд",
+    );
+    expect(weaponMechanicLabel(getWeapon("nuke"))).toBe(
+      "Большой ядерный заряд",
+    );
+    expect(weaponMechanicLabel(getWeapon("leapFrog"))).toBe(
+      "3 последовательных удара",
+    );
+    expect(weaponMechanicLabel(getWeapon("funkyBomb"))).toBe(
+      "Цепь 10–14 взрывов (demo)",
+    );
+    expect(weaponMechanicLabel(getWeapon("mirv"))).toBe(
+      "Раскрытие в апогее ×5",
+    );
+    expect(weaponMechanicLabel(getWeapon("deathsHead"))).toBe(
+      "Тяжёлый каскад ×9",
+    );
   });
 
   it("keeps depleted weapons visible but not selectable", () => {

@@ -715,6 +715,22 @@
   font-size: 10px;
 }
 
+.weaponDialogInventoryHint {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  margin-top: 7px;
+  padding: 0 9px;
+  border: 1px solid rgba(101, 224, 255, 0.26);
+  border-radius: 999px;
+  color: #bdefff;
+  background: rgba(66, 195, 232, 0.09);
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
 .weaponDialogEyebrow {
   color: var(--cyan) !important;
   font-size: 8px !important;
@@ -913,6 +929,10 @@
 .weaponOptionStatus {
   color: #849dad;
   font-size: 8px;
+}
+
+.weaponOptionTitle span {
+  line-height: 1.25;
 }
 
 .weaponOptionDescription {
@@ -1794,6 +1814,13 @@
 
   .weaponDialogHeader p:not(.weaponDialogEyebrow) {
     display: none;
+  }
+
+  .weaponDialogInventoryHint {
+    min-height: 21px;
+    margin-top: 4px;
+    padding-inline: 7px;
+    font-size: 7px;
   }
 
   .weaponDialogClose {

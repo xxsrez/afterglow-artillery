@@ -5,6 +5,7 @@ export * from "./economy";
 export * from "./effect-profiles";
 export * from "./experimental-ultimates";
 export * from "./match-policy";
+export * from "./payload-profiles";
 export * from "./player-turn";
 export * from "./random";
 export * from "./shields";
