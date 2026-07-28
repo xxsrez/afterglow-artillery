@@ -134,6 +134,9 @@ keyboard focus.
 - `hover`: дополнительный подъём/свечение только как desktop enhancement.
 - `depleted`: disabled, сниженный контраст и текст `Нет заряда`.
 - `baseline`: отдельный badge `Базовый`; никогда не depleted.
+- В Infinite Arsenal каждая позиция получает `∞`, остаётся selectable и не
+  использует depleted styling; selector не подменяет inventory большим
+  фиктивным числом.
 - Фильтр и open/closed state являются presentation-state и не попадают в
   domain или replay.
 - При смене активного игрока selector закрывается, а presentation-фильтр

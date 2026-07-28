@@ -1,6 +1,7 @@
 export * from "./ballistics";
 export * from "./constants";
 export * from "./economy";
+export * from "./match-policy";
 export * from "./player-turn";
 export * from "./random";
 export * from "./terrain";

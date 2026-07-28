@@ -30,7 +30,9 @@ describe("hot-seat player turn state", () => {
     ] as const;
     let activePlayer: 0 | 1 = 0;
 
-    expect(selectPlayerWeapon(players[activePlayer], "missile")).toBe(true);
+    expect(
+      selectPlayerWeapon(players[activePlayer], "missile", "quick-demo"),
+    ).toBe(true);
     updatePlayerAim(players[activePlayer], {
       angleDegrees: 37,
       power: 530,
@@ -42,7 +44,9 @@ describe("hot-seat player turn state", () => {
       angleDegrees: 48,
       power: 400,
     });
-    expect(selectPlayerWeapon(players[activePlayer], "nuke")).toBe(true);
+    expect(
+      selectPlayerWeapon(players[activePlayer], "nuke", "quick-demo"),
+    ).toBe(true);
     updatePlayerAim(players[activePlayer], {
       angleDegrees: 71,
       power: 820,
@@ -67,19 +71,23 @@ describe("hot-seat player turn state", () => {
     const first = makeTurnState({ missile: 1 });
     const second = makeTurnState({ missile: 1 });
 
-    expect(selectPlayerWeapon(first, "missile")).toBe(true);
-    expect(selectPlayerWeapon(second, "missile")).toBe(true);
-    expect(consumePlayerWeapon(first, "missile")).toBe(0);
+    expect(selectPlayerWeapon(first, "missile", "quick-demo")).toBe(true);
+    expect(selectPlayerWeapon(second, "missile", "quick-demo")).toBe(true);
+    expect(consumePlayerWeapon(first, "missile", "quick-demo")).toBe(0);
 
     expect(first.inventory.missile).toBe(0);
     expect(second.inventory.missile).toBe(1);
-    expect(availableSelectedWeapon(first)).toBe(BASELINE_WEAPON_ID);
-    expect(availableSelectedWeapon(second)).toBe("missile");
+    expect(availableSelectedWeapon(first, "quick-demo")).toBe(
+      BASELINE_WEAPON_ID,
+    );
+    expect(availableSelectedWeapon(second, "quick-demo")).toBe("missile");
 
-    expect(restoreAvailableSelectedWeapon(first)).toBe(BASELINE_WEAPON_ID);
+    expect(restoreAvailableSelectedWeapon(first, "quick-demo")).toBe(
+      BASELINE_WEAPON_ID,
+    );
     expect(first.selectedWeapon).toBe(BASELINE_WEAPON_ID);
     expect(second.selectedWeapon).toBe("missile");
-    expect(selectPlayerWeapon(first, "missile")).toBe(false);
+    expect(selectPlayerWeapon(first, "missile", "quick-demo")).toBe(false);
     expect(second.inventory.missile).toBe(1);
   });
 });

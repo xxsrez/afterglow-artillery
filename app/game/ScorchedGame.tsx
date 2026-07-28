@@ -9,12 +9,14 @@ import {
   WEAPONS,
   WORLD_HEIGHT,
   WORLD_WIDTH,
+  DEFAULT_DEMO_MATCH_MODE,
   availableSelectedWeapon,
   applyInterest,
   calculateInterest,
   consumePlayerWeapon,
   createDemoInventory,
   generateTerrain,
+  isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   nextPlayerIndex,
   purchaseWeapon,
@@ -23,8 +25,10 @@ import {
   restoreAvailableSelectedWeapon,
   selectPlayerWeapon,
   sellWeapon,
+  shouldOpenInterroundShop,
   simulateTrajectory,
   updatePlayerAim,
+  type DemoMatchMode,
   type Tank,
   type TrajectoryPoint,
   type Vector2,
@@ -191,6 +195,7 @@ interface PlayerTank extends Tank {
 
 interface GameModel {
   seed: number;
+  mode: DemoMatchMode;
   phase: GamePhase;
   round: number;
   activePlayer: 0 | 1;
@@ -446,6 +451,7 @@ function createGame(seed = 41_705): GameModel {
 
   return {
     seed,
+    mode: DEFAULT_DEMO_MATCH_MODE,
     phase: "intro",
     round: 1,
     activePlayer: 0,
@@ -469,8 +475,12 @@ function weaponAmmo(tank: PlayerTank, weaponId: WeaponId): number {
   return weaponAmmoCount(tank.inventory, weaponId);
 }
 
-function canUseWeapon(tank: PlayerTank, weaponId: WeaponId): boolean {
-  return isPlayerWeaponAvailable(tank, weaponId);
+function canUseWeapon(
+  model: GameModel,
+  tank: PlayerTank,
+  weaponId: WeaponId,
+): boolean {
+  return isPlayerWeaponAvailable(tank, weaponId, model.mode);
 }
 
 function projectileOrigin(tank: PlayerTank): Vector2 {
@@ -1533,7 +1543,7 @@ function chooseAvailableWeapon(
   model: GameModel,
   player: 0 | 1,
 ): WeaponId {
-  return availableSelectedWeapon(model.tanks[player]);
+  return availableSelectedWeapon(model.tanks[player], model.mode);
 }
 
 function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
@@ -1577,14 +1587,21 @@ function completeRound(model: GameModel): void {
     model.tanks[winner].wins += 1;
   }
 
-  model.tanks.forEach((tank, index) => {
-    tank.credits +=
-      7_000 +
-      Math.round(tank.damageDealt * 55) +
-      (winner === index ? 2_500 : 0);
-    tank.bankAtRoundStart = tank.credits;
-    tank.lastInterest = 0;
-  });
+  if (shouldOpenInterroundShop(model.mode)) {
+    model.tanks.forEach((tank, index) => {
+      tank.credits +=
+        7_000 +
+        Math.round(tank.damageDealt * 55) +
+        (winner === index ? 2_500 : 0);
+      tank.bankAtRoundStart = tank.credits;
+      tank.lastInterest = 0;
+    });
+  } else {
+    model.tanks.forEach((tank) => {
+      tank.bankAtRoundStart = 0;
+      tank.lastInterest = 0;
+    });
+  }
 
   model.phase = "roundEnd";
   model.message = draw
@@ -1593,14 +1610,22 @@ function completeRound(model: GameModel): void {
 }
 
 function prepareNextRound(model: GameModel): void {
-  const interestEarned = model.tanks.map((tank) => {
+  const applyRoundInterest = (tank: PlayerTank): number => {
     const eligibleBank = tank.credits;
     const earned = calculateInterest(eligibleBank);
     const verifiedEarned = applyInterest(eligibleBank) - eligibleBank;
     tank.lastInterest = Math.min(earned, verifiedEarned);
     tank.credits += tank.lastInterest;
     return tank.lastInterest;
-  });
+  };
+  const interestEarned: [number, number] = shouldOpenInterroundShop(
+    model.mode,
+  )
+    ? [
+        applyRoundInterest(model.tanks[0]),
+        applyRoundInterest(model.tanks[1]),
+      ]
+    : [0, 0];
 
   model.round += 1;
   model.turn = 0;
@@ -1631,9 +1656,10 @@ function prepareNextRound(model: GameModel): void {
   });
 
   model.phase = "aiming";
-  model.message =
-    `Раунд ${model.round}. Проценты 5%: +₡${formatCredits(interestEarned[0] ?? 0)} / ` +
-    `+₡${formatCredits(interestEarned[1] ?? 0)}. Ветер ${Math.abs(model.wind)}.`;
+  model.message = isInfiniteArsenalMode(model.mode)
+    ? `Раунд ${model.round}. Infinite Arsenal: магазин пропущен, все 33 позиции доступны. Ветер ${Math.abs(model.wind)}.`
+    : `Раунд ${model.round}. Проценты 5%: +₡${formatCredits(interestEarned[0])} / ` +
+      `+₡${formatCredits(interestEarned[1])}. Ветер ${Math.abs(model.wind)}.`;
 }
 
 function renderTerrain(
@@ -2804,6 +2830,7 @@ export default function ScorchedGame() {
   const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
 
   const model = gameRef.current;
+  const infiniteArsenal = isInfiniteArsenalMode(model.mode);
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
   const selectedWeaponDefinition = catalogWeapon(selectedWeapon);
@@ -2934,7 +2961,10 @@ export default function ScorchedGame() {
       completeRound(game);
     } else {
       game.activePlayer = nextPlayerIndex(shot.owner);
-      restoreAvailableSelectedWeapon(game.tanks[game.activePlayer]);
+      restoreAvailableSelectedWeapon(
+        game.tanks[game.activePlayer],
+        game.mode,
+      );
       game.phase = "aiming";
       game.message = `${game.tanks[game.activePlayer].name}: учитывайте ветер и след прошлого выстрела.`;
     }
@@ -3084,7 +3114,7 @@ export default function ScorchedGame() {
         return;
       }
       const tank = game.tanks[game.activePlayer];
-      if (!selectPlayerWeapon(tank, weaponId)) {
+      if (!selectPlayerWeapon(tank, weaponId, game.mode)) {
         game.message = `${catalogWeapon(weaponId).name}: боезапас исчерпан.`;
         refresh();
         return;
@@ -3099,7 +3129,13 @@ export default function ScorchedGame() {
   const selectWeaponFromSelector = useCallback(
     (weaponId: WeaponId) => {
       const game = gameRef.current;
-      if (!canUseWeapon(game.tanks[game.activePlayer], weaponId)) {
+      if (
+        !canUseWeapon(
+          game,
+          game.tanks[game.activePlayer],
+          weaponId,
+        )
+      ) {
         return;
       }
       selectWeapon(weaponId);
@@ -3179,7 +3215,11 @@ export default function ScorchedGame() {
         const candidate = WEAPONS[index];
         if (
           candidate &&
-          canUseWeapon(game.tanks[game.activePlayer], candidate.id)
+          canUseWeapon(
+            game,
+            game.tanks[game.activePlayer],
+            candidate.id,
+          )
         ) {
           selectWeapon(candidate.id);
           break;
@@ -3198,7 +3238,7 @@ export default function ScorchedGame() {
     const owner = game.activePlayer;
     const weaponId = chooseAvailableWeapon(game, owner);
     const tank = game.tanks[owner];
-    consumePlayerWeapon(tank, weaponId);
+    consumePlayerWeapon(tank, weaponId, game.mode);
 
     impactAudioPlayedRef.current = false;
     shotRef.current = buildShot(game, owner, weaponId);
@@ -3294,10 +3334,27 @@ export default function ScorchedGame() {
     }
   }, [refresh]);
 
+  const selectMatchMode = useCallback(
+    (mode: DemoMatchMode) => {
+      const game = gameRef.current;
+      if (game.phase !== "intro") {
+        return;
+      }
+      game.mode = mode;
+      game.message = isInfiniteArsenalMode(mode)
+        ? "Infinite Arsenal выбран: все 33 позиции бесконечны, магазин отключён."
+        : "Quick Demo выбран: finite ammo расходуется, между раундами работает магазин.";
+      refresh();
+    },
+    [refresh],
+  );
+
   const startMatch = useCallback(() => {
     const game = gameRef.current;
     game.phase = "aiming";
-    game.message = `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
+    game.message = isInfiniteArsenalMode(game.mode)
+      ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите любую из 33 позиций.`
+      : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
     refresh();
     void ensureAudio();
   }, [ensureAudio, refresh]);
@@ -3307,10 +3364,12 @@ export default function ScorchedGame() {
     if (game.round >= TOTAL_ROUNDS) {
       game.phase = "matchEnd";
       game.message = "Три раунда завершены.";
-    } else {
+    } else if (shouldOpenInterroundShop(game.mode)) {
       game.phase = "shop";
       game.shopPlayer = 0;
       game.message = `${game.tanks[0].name}: выберите покупки на следующий раунд.`;
+    } else {
+      prepareNextRound(game);
     }
     refresh();
   }, [refresh]);
@@ -3598,7 +3657,13 @@ export default function ScorchedGame() {
         ))}
 
         <section className={styles.roundHud} aria-label="Раунд и ветер">
-          <p className={styles.eyebrow}>Quick Match</p>
+          <p
+            className={`${styles.eyebrow} ${
+              infiniteArsenal ? styles.showcaseBadge : ""
+            }`}
+          >
+            {infiniteArsenal ? "Infinite Arsenal" : "Quick Match"}
+          </p>
           <strong className={styles.roundValue}>
             Раунд {model.round}/{TOTAL_ROUNDS}
           </strong>
@@ -3693,7 +3758,9 @@ export default function ScorchedGame() {
               aria-controls="weapon-selector-dialog"
               data-game-keyboard-owner="aiming"
               aria-label={`Открыть арсенал: ${selectedWeaponDefinition.name}, ${
-                selectedWeaponDefinition.ammo.kind === "unlimited"
+                infiniteArsenal
+                  ? "бесконечный showcase-доступ"
+                  : selectedWeaponDefinition.ammo.kind === "unlimited"
                   ? "бесконечный запас"
                   : `боезапас ${weaponAmmo(activeTank, selectedWeapon)}`
               }`}
@@ -3714,7 +3781,9 @@ export default function ScorchedGame() {
               </span>
               <span className={styles.weaponTriggerMeta}>
                 <strong>
-                  {selectedWeaponDefinition.ammo.kind === "unlimited"
+                  {infiniteArsenal
+                    ? "∞ showcase"
+                    : selectedWeaponDefinition.ammo.kind === "unlimited"
                     ? "∞ базовый"
                     : `× ${weaponAmmo(activeTank, selectedWeapon)}`}
                 </strong>
@@ -3831,15 +3900,25 @@ export default function ScorchedGame() {
           >
             {selectorWeapons.map((weapon) => {
               const ammo = weaponAmmo(activeTank, weapon.id);
-              const available = canUseWeapon(activeTank, weapon.id);
+              const available = canUseWeapon(
+                model,
+                activeTank,
+                weapon.id,
+              );
               const selected = selectedWeapon === weapon.id;
-              const status = selected
-                ? "Выбрано"
+              const availabilityStatus = infiniteArsenal
+                ? "Бесконечный доступ"
                 : weapon.ammo.kind === "unlimited"
                   ? "Базовый"
                   : available
                     ? `Боезапас ${ammo}`
                     : "Нет заряда";
+              const status = selected
+                ? "Выбрано"
+                : availabilityStatus;
+              const accessibleStatus = selected
+                ? `Выбрано, ${availabilityStatus}`
+                : availabilityStatus;
 
               return (
                 <button
@@ -3858,7 +3937,7 @@ export default function ScorchedGame() {
                   aria-disabled={!available}
                   aria-label={`${weapon.name}, ${weaponCategoryLabel(
                     weapon.category,
-                  )}, ${status}`}
+                  )}, ${accessibleStatus}`}
                   title={weapon.description}
                   onClick={() => {
                     if (available) {
@@ -3884,7 +3963,10 @@ export default function ScorchedGame() {
                   <span className={styles.weaponOptionStatus}>
                     <strong>{status}</strong>
                     <span>
-                      {weapon.ammo.kind === "unlimited" ? "∞" : `× ${ammo}`}
+                      {infiniteArsenal ||
+                      weapon.ammo.kind === "unlimited"
+                        ? "∞"
+                        : `× ${ammo}`}
                     </span>
                   </span>
                 </button>
@@ -3906,24 +3988,61 @@ export default function ScorchedGame() {
             </h2>
             <p className={styles.modalText}>
               Два пилота по очереди на одном экране. Настройте угол и силу,
-              учтите ветер и испытайте все 33 роли полного арсенала. У каждого
-              пилота есть demo-shot каждого конечного оружия, Baby Missile
-              бесконечна, а Funky Bomb запускает seeded цветную цепь.
+              учтите ветер и выберите правила доступности арсенала перед
+              стартом.
             </p>
+            <div
+              className={styles.modeGrid}
+              aria-label="Режим матча"
+            >
+              <button
+                type="button"
+                className={`${styles.modeButton} ${
+                  !infiniteArsenal ? styles.modeButtonActive : ""
+                }`}
+                aria-pressed={!infiniteArsenal}
+                onClick={() => selectMatchMode("quick-demo")}
+              >
+                <strong>Quick Demo</strong>
+                <span>
+                  Finite ammo расходуется, между раундами работает магазин.
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`${styles.modeButton} ${
+                  infiniteArsenal ? styles.modeButtonActive : ""
+                }`}
+                aria-pressed={infiniteArsenal}
+                onClick={() => selectMatchMode("infinite-arsenal")}
+              >
+                <strong>Infinite Arsenal</strong>
+                <span>
+                  Неканонический showcase: все 33 позиции бесконечны, без
+                  магазина.
+                </span>
+              </button>
+            </div>
             <div className={styles.modalActions}>
               <button
                 type="button"
                 className={`${styles.modalButton} ${styles.modalButtonPrimary}`}
                 onClick={() => void startMatch()}
               >
-                Начать бой
+                {infiniteArsenal
+                  ? "Начать Infinite Arsenal"
+                  : "Начать Quick Demo"}
               </button>
             </div>
             <p className={styles.modalText}>
               На клавиатуре: стрелки, Q/E, пробел. На телефоне — крупные
               кнопки и слайдеры.
             </p>
-            <p className={styles.disclosure}>{DEMO_PAYOUT_DISCLOSURE}</p>
+            <p className={styles.disclosure}>
+              {infiniteArsenal
+                ? "Infinite Arsenal — демонстрационный неканонический режим; механика выстрела не меняется, отключены только расход ammo и магазин."
+                : DEMO_PAYOUT_DISCLOSURE}
+            </p>
           </section>
         </div>
       )}
@@ -4005,10 +4124,15 @@ export default function ScorchedGame() {
                 : `${model.tanks[model.roundWinner as 0 | 1].name} побеждает`}
             </h2>
             <p className={styles.modalText}>
-              Оба пилота получили награду за нанесённый урон. Победителю
-              начислен дополнительный бонус.
+              {infiniteArsenal
+                ? "Showcase сохраняет результат раунда, но пропускает экономику и сразу продолжает с бесконечным арсеналом."
+                : "Оба пилота получили награду за нанесённый урон. Победителю начислен дополнительный бонус."}
             </p>
-            <p className={styles.disclosure}>{DEMO_PAYOUT_DISCLOSURE}</p>
+            {!infiniteArsenal && (
+              <p className={styles.disclosure}>
+                {DEMO_PAYOUT_DISCLOSURE}
+              </p>
+            )}
             <div className={styles.scoreGrid}>
               {model.tanks.map((tank) => (
                 <div
@@ -4031,7 +4155,11 @@ export default function ScorchedGame() {
                 className={`${styles.modalButton} ${styles.modalButtonPrimary}`}
                 onClick={openRoundResult}
               >
-                {model.round >= TOTAL_ROUNDS ? "Итоги матча" : "В магазин"}
+                {model.round >= TOTAL_ROUNDS
+                  ? "Итоги матча"
+                  : infiniteArsenal
+                    ? "Следующий showcase-раунд"
+                    : "В магазин"}
               </button>
             </div>
           </section>
@@ -4284,7 +4412,11 @@ export default function ScorchedGame() {
             <div className={styles.modalMark} aria-hidden="true">
               ✺
             </div>
-            <p className={styles.eyebrow}>Quick Match завершён</p>
+            <p className={styles.eyebrow}>
+              {infiniteArsenal
+                ? "Infinite Arsenal завершён"
+                : "Quick Match завершён"}
+            </p>
             <h2 id="match-title" className={styles.modalTitle}>
               {winner ? `${winner.name} — победитель` : "Матч окончен вничью"}
             </h2>

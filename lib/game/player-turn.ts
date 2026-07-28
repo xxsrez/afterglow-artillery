@@ -1,30 +1,35 @@
+import {
+  canSelectWeapon,
+  shouldConsumeAmmo,
+  type DemoMatchMode,
+} from "./match-policy";
 import type { PlayerTurnState } from "./types";
-import { getWeapon, type WeaponId } from "./weapons";
+import type { WeaponId } from "./weapons";
 
 export const BASELINE_WEAPON_ID: WeaponId = "babyMissile";
 
 export function isPlayerWeaponAvailable(
   player: Readonly<PlayerTurnState>,
   weaponId: WeaponId,
+  mode: DemoMatchMode,
 ): boolean {
-  return (
-    getWeapon(weaponId).ammo.kind === "unlimited" ||
-    (player.inventory[weaponId] ?? 0) > 0
-  );
+  return canSelectWeapon(mode, player, weaponId);
 }
 
 export function availableSelectedWeapon(
   player: Readonly<PlayerTurnState>,
+  mode: DemoMatchMode,
 ): WeaponId {
-  return isPlayerWeaponAvailable(player, player.selectedWeapon)
+  return isPlayerWeaponAvailable(player, player.selectedWeapon, mode)
     ? player.selectedWeapon
     : BASELINE_WEAPON_ID;
 }
 
 export function restoreAvailableSelectedWeapon(
   player: PlayerTurnState,
+  mode: DemoMatchMode,
 ): WeaponId {
-  const weaponId = availableSelectedWeapon(player);
+  const weaponId = availableSelectedWeapon(player, mode);
   player.selectedWeapon = weaponId;
   return weaponId;
 }
@@ -32,8 +37,9 @@ export function restoreAvailableSelectedWeapon(
 export function selectPlayerWeapon(
   player: PlayerTurnState,
   weaponId: WeaponId,
+  mode: DemoMatchMode,
 ): boolean {
-  if (!isPlayerWeaponAvailable(player, weaponId)) {
+  if (!isPlayerWeaponAvailable(player, weaponId, mode)) {
     return false;
   }
   player.selectedWeapon = weaponId;
@@ -43,9 +49,10 @@ export function selectPlayerWeapon(
 export function consumePlayerWeapon(
   player: PlayerTurnState,
   weaponId: WeaponId,
+  mode: DemoMatchMode,
 ): number {
-  if (getWeapon(weaponId).ammo.kind === "unlimited") {
-    return Number.POSITIVE_INFINITY;
+  if (!shouldConsumeAmmo(mode, weaponId)) {
+    return player.inventory[weaponId] ?? 0;
   }
 
   const remaining = Math.max(0, (player.inventory[weaponId] ?? 0) - 1);

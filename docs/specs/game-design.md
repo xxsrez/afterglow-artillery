@@ -76,6 +76,24 @@ Classic:
 Начальный shot каждого weapon — демонстрационное отличие. Оно не переносится в
 Classic, где default начинается с бесконечной Baby Missile и нулевого cash.
 
+### Infinite Arsenal / Showcase
+
+Явно выбираемый неканонический вариант Quick Demo. Он сохраняет ту же seeded
+симуляцию, damage profiles, баллистику, ветер, рельеф, порядок ходов и VFX, но
+меняет только ammo policy и межраундовый переход:
+
+- все 33 weapons доступны обоим игрокам без расхода inventory;
+- selector и current-weapon control показывают `∞`, не фиктивное большое
+  число;
+- player-owned выбор оружия, угол и сила остаются независимыми;
+- payout, purchase, sale, inventory cap и interest не влияют на доступность;
+- магазин между раундами пропускается, результат и число побед сохраняются;
+- постоянный badge `Infinite Arsenal` отличает showcase от Quick Demo.
+
+Новый матч по умолчанию снова предлагает Quick Demo; Infinite Arsenal не
+переносится скрыто между сессиями. Режим не считается Classic parity и не
+меняет характеристики самих weapons.
+
 ### Sandbox
 
 Будущий режим для настройки ветра, гравитации, стен, рельефа, экономики и
@@ -145,6 +163,8 @@ Classic, где default начинается с бесконечной Baby Miss
    сравнением и playtest-данными.
 5. Quick Demo может менять доступность и темп экономики, но не скрыто
    подменять характеристики предмета с тем же идентификатором.
+6. Infinite Arsenal меняет только явную ammo/interround policy; mechanical
+   outcome одного seeded shot совпадает с Quick Demo.
 
 ### Принятый контракт Quick Demo
 
