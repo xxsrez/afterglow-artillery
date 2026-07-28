@@ -10,7 +10,8 @@ import {
   SHIELDS,
   TerrainGrid,
   WEAPONS,
-  WORLD_HEIGHT,
+  VIEWPORT_HEIGHT,
+  VIEWPORT_WIDTH,
   WORLD_WIDTH,
   DEFAULT_DEMO_MATCH_MODE,
   availableSelectedWeapon,
@@ -18,7 +19,7 @@ import {
   calculateInterest,
   consumePlayerWeapon,
   createDemoInventory,
-  generateTerrain,
+  generateBattlefield,
   getShield,
   getExperimentalUltimate,
   getWeaponEffectProfile,
@@ -41,12 +42,15 @@ import {
   simulateTrajectory,
   updatePlayerAim,
   type DemoMatchMode,
+  type BattlefieldSpawn,
   type ExperimentalResolutionResult,
   type ExperimentalUltimateId,
   type ShieldDamageKind,
   type ShieldEvent,
   type ShieldId,
   type Tank,
+  type TerrainBounds,
+  type TerrainEdit,
   type TrajectoryPoint,
   type Vector2,
   type WeaponEffectProfile,
@@ -59,8 +63,21 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 
+import {
+  averagePoints,
+  clampCamera,
+  clientPointToContainedViewport,
+  createCamera,
+  flightFocusPoint,
+  moveCameraToward,
+  panCameraByScreenDelta,
+  zoomCameraAtScreenPoint,
+  type CameraState,
+} from "./camera";
 import {
   angleDeltaForScreenDirection,
   barrelEndX,
@@ -252,6 +269,7 @@ interface GameModel {
   shopPlayer: 0 | 1;
   terrain: TerrainGrid;
   terrainRevision: number;
+  terrainDirtyRegion: TerrainBounds | "full" | null;
   wind: number;
   turn: number;
   tanks: [PlayerTank, PlayerTank];
@@ -335,8 +353,27 @@ interface Particle {
 
 interface TerrainCache {
   canvas: HTMLCanvasElement;
+  minimap: HTMLCanvasElement;
   revision: number;
 }
+
+interface CameraGesture {
+  readonly pointers: Map<number, Vector2>;
+  pinchDistance: number | null;
+  pinchMidpoint: Vector2 | null;
+  minimapPointerId: number | null;
+}
+
+const CAMERA_VIEWPORT = {
+  width: VIEWPORT_WIDTH,
+  height: VIEWPORT_HEIGHT,
+} as const;
+const MINIMAP_BOUNDS = {
+  x: VIEWPORT_WIDTH / 2 - 145,
+  y: 119,
+  width: 290,
+  height: 58,
+} as const;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
@@ -442,11 +479,80 @@ function samplePath(
 }
 
 function surfaceForTank(terrain: TerrainGrid, x: number): number {
-  return terrain.surfaceY(x) ?? WORLD_HEIGHT - 26;
+  return terrain.surfaceY(x) ?? terrain.height - 26;
 }
 
-function tankY(terrain: TerrainGrid, x: number): number {
-  return surfaceForTank(terrain, x) - TANK_HALF_HEIGHT;
+function shotCameraTarget(
+  shot: ShotVisual,
+  progress: number,
+): Vector2 {
+  if (progress >= shot.resolvedAt) {
+    return averagePoints(
+      shot.impactPoints.length > 0
+        ? shot.impactPoints
+        : [shot.finalPoint],
+      shot.finalPoint,
+    );
+  }
+
+  return flightFocusPoint(shot.segments, progress, shot.origin);
+}
+
+function pointerDistance(first: Vector2, second: Vector2): number {
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function pointerMidpoint(first: Vector2, second: Vector2): Vector2 {
+  return {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  };
+}
+
+function canvasPointFromClient(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+): Vector2 {
+  return clientPointToContainedViewport(
+    { x: clientX, y: clientY },
+    canvas.getBoundingClientRect(),
+    CAMERA_VIEWPORT,
+  );
+}
+
+function pointInsideMinimap(point: Vector2): boolean {
+  return (
+    point.x >= MINIMAP_BOUNDS.x &&
+    point.x <= MINIMAP_BOUNDS.x + MINIMAP_BOUNDS.width &&
+    point.y >= MINIMAP_BOUNDS.y &&
+    point.y <= MINIMAP_BOUNDS.y + MINIMAP_BOUNDS.height
+  );
+}
+
+function minimapPointToWorld(
+  point: Vector2,
+  terrain: TerrainGrid,
+): Vector2 {
+  return {
+    x:
+      ((point.x - MINIMAP_BOUNDS.x) / MINIMAP_BOUNDS.width) *
+      terrain.width,
+    y:
+      ((point.y - MINIMAP_BOUNDS.y) / MINIMAP_BOUNDS.height) *
+      terrain.height,
+  };
+}
+
+function cameraWorldForTerrain(terrain: TerrainGrid) {
+  return { width: terrain.width, height: terrain.height };
+}
+
+function cameraTargetForTank(tank: PlayerTank): Vector2 {
+  return {
+    x: tank.x,
+    y: tank.y - 72,
+  };
 }
 
 function initialInventory(): Partial<Record<WeaponId, number>> {
@@ -455,15 +561,13 @@ function initialInventory(): Partial<Record<WeaponId, number>> {
 
 function makePlayer(
   index: 0 | 1,
-  terrain: TerrainGrid,
+  spawn: BattlefieldSpawn,
 ): PlayerTank {
-  const x = index === 0 ? 155 : WORLD_WIDTH - 155;
-
   return {
     id: `player-${index + 1}`,
     name: PLAYER_NAMES[index],
-    x,
-    y: tankY(terrain, x),
+    x: spawn.x,
+    y: spawn.y,
     direction: index === 0 ? 1 : -1,
     selectedWeapon: "babyMissile",
     selectedExperimental: null,
@@ -494,13 +598,8 @@ function nextWind(seed: number, round: number): number {
 }
 
 function createGame(seed = 41_705): GameModel {
-  const terrain = generateTerrain(seed, {
-    minSurfaceY: 245,
-    maxSurfaceY: 370,
-    roughness: 56,
-    caveCount: 5,
-    bedrockDepth: 46,
-  });
+  const battlefield = generateBattlefield(seed);
+  const { terrain, spawns } = battlefield;
 
   return {
     seed,
@@ -511,9 +610,13 @@ function createGame(seed = 41_705): GameModel {
     shopPlayer: 0,
     terrain,
     terrainRevision: 0,
+    terrainDirtyRegion: "full",
     wind: nextWind(seed, 1),
     turn: 0,
-    tanks: [makePlayer(0, terrain), makePlayer(1, terrain)],
+    tanks: [
+      makePlayer(0, spawns[0]),
+      makePlayer(1, spawns[1]),
+    ],
     roundWinner: null,
     lastRoundWasDraw: false,
     shieldEvents: [],
@@ -573,12 +676,12 @@ function buildRollPath(
   const leftSurface = surfaceForTank(terrain, impact.x - 8);
   const rightSurface = surfaceForTank(terrain, impact.x + 8);
   let direction = rightSurface >= leftSurface ? 1 : -1;
-  let x = clamp(impact.x, 3, WORLD_WIDTH - 3);
+  let x = clamp(impact.x, 3, terrain.width - 3);
   let previousY = surfaceForTank(terrain, x) - 4;
   const points: Vector2[] = [{ x, y: previousY }];
 
   for (let step = 0; step < 55; step += 1) {
-    const candidateX = clamp(x + direction * 3.2, 3, WORLD_WIDTH - 3);
+    const candidateX = clamp(x + direction * 3.2, 3, terrain.width - 3);
     const candidateY = surfaceForTank(terrain, candidateX) - 4;
 
     if (candidateY < previousY - 7) {
@@ -591,7 +694,7 @@ function buildRollPath(
     points.push({ x, y: candidateY });
 
     const aheadY =
-      surfaceForTank(terrain, clamp(x + direction * 6, 2, WORLD_WIDTH - 2)) -
+      surfaceForTank(terrain, clamp(x + direction * 6, 2, terrain.width - 2)) -
       4;
     if (Math.abs(aheadY - candidateY) < 1 && step > 20) {
       break;
@@ -652,6 +755,7 @@ function linePath(
 }
 
 function buildFunkyChain(
+  terrain: TerrainGrid,
   impact: Vector2,
   count: number,
   seed: number,
@@ -665,8 +769,12 @@ function buildFunkyChain(
       (Math.PI * 2 * index) / boundedCount + random.float(-0.5, 0.5);
     const radius = Math.sqrt(random.float(0.05, 1)) * 76;
     points.push({
-      x: clamp(impact.x + Math.cos(angle) * radius, 8, WORLD_WIDTH - 8),
-      y: clamp(impact.y + Math.sin(angle) * radius * 0.7, 12, WORLD_HEIGHT - 8),
+      x: clamp(impact.x + Math.cos(angle) * radius, 8, terrain.width - 8),
+      y: clamp(
+        impact.y + Math.sin(angle) * radius * 0.7,
+        12,
+        terrain.height - 8,
+      ),
     });
   }
 
@@ -804,6 +912,7 @@ function buildShot(
       style: "funky",
     });
     const chain = buildFunkyChain(
+      model.terrain,
       impact,
       random.integer(10, 15),
       shotSeed,
@@ -1041,12 +1150,12 @@ function buildShot(
       x: clamp(
         tank.x + Math.cos(radians) * tank.direction * length,
         4,
-        WORLD_WIDTH - 4,
+        model.terrain.width - 4,
       ),
       y: clamp(
         tank.y - 7 - Math.sin(radians) * length,
         4,
-        WORLD_HEIGHT - 4,
+        model.terrain.height - 4,
       ),
     };
     segments.push({
@@ -1064,9 +1173,15 @@ function buildShot(
   }
 
   if (behavior.kind === "settle") {
-    const center = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
+    const center = {
+      x: model.terrain.width / 2,
+      y: model.terrain.height / 2,
+    };
     segments.push({
-      path: linePath({ x: center.x, y: 30 }, { x: center.x, y: WORLD_HEIGHT - 12 }),
+      path: linePath(
+        { x: center.x, y: 30 },
+        { x: center.x, y: model.terrain.height - 12 },
+      ),
       startsAt: 0.12,
       endsAt: 0.64,
       style: "settle",
@@ -1099,8 +1214,10 @@ function buildShot(
     const radians = (tank.angleDegrees * Math.PI) / 180;
     const start = { x: tank.x, y: tank.y - 8 };
     const end = {
-      x: start.x + Math.cos(radians) * tank.direction * WORLD_WIDTH * 1.35,
-      y: start.y - Math.sin(radians) * WORLD_WIDTH * 1.35,
+      x:
+        start.x +
+        Math.cos(radians) * tank.direction * model.terrain.width * 1.35,
+      y: start.y - Math.sin(radians) * model.terrain.width * 1.35,
     };
     const laserPath = linePath(start, end, 180);
     segments.push({
@@ -1317,11 +1434,14 @@ function settleTanks(
 ): void {
   for (const tank of model.tanks) {
     const previousY = tank.y;
-    const surface = model.terrain.surfaceY(tank.x);
+    const surface = model.terrain.firstSolidYAtOrBelow(
+      tank.x,
+      previousY + TANK_HALF_HEIGHT,
+    );
 
     if (surface === null) {
       tank.health = 0;
-      tank.y = WORLD_HEIGHT + 30;
+      tank.y = model.terrain.height + 30;
       continue;
     }
 
@@ -1340,21 +1460,80 @@ function settleTanks(
   }
 }
 
+function mergeTerrainBounds(
+  current: TerrainBounds | null,
+  next: TerrainBounds | null,
+): TerrainBounds | null {
+  if (current === null) {
+    return next;
+  }
+  if (next === null) {
+    return current;
+  }
+
+  const left = Math.min(current.x, next.x);
+  const top = Math.min(current.y, next.y);
+  const right = Math.max(
+    current.x + current.width,
+    next.x + next.width,
+  );
+  const bottom = Math.max(
+    current.y + current.height,
+    next.y + next.height,
+  );
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function includeTerrainEdit(
+  bounds: TerrainBounds | null,
+  edit: TerrainEdit,
+): TerrainBounds | null {
+  return mergeTerrainBounds(bounds, edit.bounds);
+}
+
+function queueTerrainDirtyRegion(
+  model: GameModel,
+  bounds: TerrainBounds | null,
+): void {
+  if (bounds === null || model.terrainDirtyRegion === "full") {
+    return;
+  }
+
+  model.terrainDirtyRegion = mergeTerrainBounds(
+    model.terrainDirtyRegion,
+    bounds,
+  );
+}
+
+function queueFullTerrainRedraw(model: GameModel): void {
+  model.terrainDirtyRegion = "full";
+}
+
 function editAlongPath(
   terrain: TerrainGrid,
   path: readonly Vector2[],
   radius: number,
   mode: "carve" | "fill",
   stride = 3,
-): void {
+): TerrainBounds | null {
+  let bounds: TerrainBounds | null = null;
+
   for (let index = 0; index < path.length; index += stride) {
     const point = path[index] as Vector2;
-    if (mode === "carve") {
-      terrain.carveCircle(point.x, point.y, radius);
-    } else {
-      terrain.fillCircle(point.x, point.y, radius, Material.Soil);
-    }
+    const edit =
+      mode === "carve"
+        ? terrain.carveCircle(point.x, point.y, radius)
+        : terrain.fillCircle(point.x, point.y, radius, Material.Soil);
+    bounds = includeTerrainEdit(bounds, edit);
   }
+
+  return bounds;
 }
 
 function editWedge(
@@ -1363,17 +1542,20 @@ function editWedge(
   end: Vector2,
   width: number,
   mode: "carve" | "fill",
-): void {
+): TerrainBounds | null {
+  let bounds: TerrainBounds | null = null;
   const spine = linePath(start, end, 28);
   spine.forEach((point, index) => {
     const progress = index / Math.max(1, spine.length - 1);
     const radius = 3 + progress * width;
-    if (mode === "carve") {
-      terrain.carveCircle(point.x, point.y, radius);
-    } else {
-      terrain.fillCircle(point.x, point.y, radius, Material.Soil);
-    }
+    const edit =
+      mode === "carve"
+        ? terrain.carveCircle(point.x, point.y, radius)
+        : terrain.fillCircle(point.x, point.y, radius, Material.Soil);
+    bounds = includeTerrainEdit(bounds, edit);
   });
+
+  return bounds;
 }
 
 function distanceToSegment(
@@ -1425,8 +1607,8 @@ function deflectImpactPoint(
   }
 
   const deflectedPoint = {
-    x: clamp(result.point.x, 4, WORLD_WIDTH - 4),
-    y: clamp(result.point.y, 4, WORLD_HEIGHT - 4),
+    x: clamp(result.point.x, 4, model.terrain.width - 4),
+    y: clamp(result.point.y, 4, model.terrain.height - 4),
   };
   target.shield = result.remainingCapacity;
   target.shieldResponse = result.event.type;
@@ -1470,8 +1652,37 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     const previousHealth = new Map(
       model.tanks.map((tank) => [tank.id, tank.health] as const),
     );
+    const terrainEvents = shot.experimentalResult.eventLog.filter(
+      (
+        event,
+      ): event is Extract<
+        (typeof shot.experimentalResult.eventLog)[number],
+        { type: "terrain" }
+      > => event.type === "terrain",
+    );
+    let experimentalDirtyBounds: TerrainBounds | null = null;
+    let requiresFullRedraw = terrainEvents.length === 0;
+    for (const event of terrainEvents) {
+      if (event.changedCells <= 0) {
+        continue;
+      }
+      if (event.bounds === null) {
+        requiresFullRedraw = true;
+        continue;
+      }
+      experimentalDirtyBounds = mergeTerrainBounds(
+        experimentalDirtyBounds,
+        event.bounds,
+      );
+    }
+
     model.terrain = shot.experimentalResult.terrain;
     model.terrainRevision += 1;
+    if (requiresFullRedraw) {
+      queueFullTerrainRedraw(model);
+    } else {
+      queueTerrainDirtyRegion(model, experimentalDirtyBounds);
+    }
     for (const resolvedTank of shot.experimentalResult.tanks) {
       const tank = model.tanks.find(
         (candidate) => candidate.id === resolvedTank.id,
@@ -1508,6 +1719,16 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   const resolution = weapon.demoResolution;
   const effectProfile = getWeaponEffectProfile(shot.weaponId);
   let terrainChanged = false;
+  let terrainDirtyBounds: TerrainBounds | null = null;
+  const includeEdit = (edit: TerrainEdit): void => {
+    terrainDirtyBounds = includeTerrainEdit(terrainDirtyBounds, edit);
+  };
+  const includeBounds = (bounds: TerrainBounds | null): void => {
+    terrainDirtyBounds = mergeTerrainBounds(
+      terrainDirtyBounds,
+      bounds,
+    );
+  };
 
   if (shot.fizzled) {
     return;
@@ -1516,10 +1737,12 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   applyShieldDeflection(model, shot);
 
   if (behavior.kind === "blast") {
-    model.terrain.carveCircle(
-      shot.finalPoint.x,
-      shot.finalPoint.y,
-      resolution.radius,
+    includeEdit(
+      model.terrain.carveCircle(
+        shot.finalPoint.x,
+        shot.finalPoint.y,
+        resolution.radius,
+      ),
     );
     explosionDamage(
       model,
@@ -1535,7 +1758,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     shot.impactPoints.forEach((point, index) => {
       const multiplier = [0.68, 0.84, 1][index] ?? 1;
       const radius = Math.max(8, resolution.radius * multiplier);
-      model.terrain.carveCircle(point.x, point.y, radius);
+      includeEdit(model.terrain.carveCircle(point.x, point.y, radius));
       explosionDamage(
         model,
         shot.owner,
@@ -1553,7 +1776,13 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       resolution.damage / Math.max(2.8, Math.sqrt(shot.impactPoints.length));
     shot.impactPoints.forEach((point, index) => {
       const wobble = 0.82 + (index % 4) * 0.08;
-      model.terrain.carveCircle(point.x, point.y, nodeRadius * wobble);
+      includeEdit(
+        model.terrain.carveCircle(
+          point.x,
+          point.y,
+          nodeRadius * wobble,
+        ),
+      );
       explosionDamage(
         model,
         shot.owner,
@@ -1570,7 +1799,13 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       resolution.damage /
       Math.max(1.6, Math.sqrt(Math.max(1, shot.impactPoints.length)));
     shot.impactPoints.forEach((point) => {
-      model.terrain.carveCircle(point.x, point.y, resolution.radius);
+      includeEdit(
+        model.terrain.carveCircle(
+          point.x,
+          point.y,
+          resolution.radius,
+        ),
+      );
       explosionDamage(
         model,
         shot.owner,
@@ -1583,10 +1818,12 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "roller") {
-    model.terrain.carveCircle(
-      shot.finalPoint.x,
-      shot.finalPoint.y,
-      resolution.radius,
+    includeEdit(
+      model.terrain.carveCircle(
+        shot.finalPoint.x,
+        shot.finalPoint.y,
+        resolution.radius,
+      ),
     );
     explosionDamage(
       model,
@@ -1601,10 +1838,12 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   if (behavior.kind === "napalm") {
     shot.flowPoints.forEach((point, index) => {
       if (index % 2 === 0) {
-        model.terrain.carveCircle(
-          point.x,
-          point.y + 2,
-          behavior.tier >= 4 ? 8 : 5,
+        includeEdit(
+          model.terrain.carveCircle(
+            point.x,
+            point.y + 2,
+            behavior.tier >= 4 ? 8 : 5,
+          ),
         );
       }
     });
@@ -1632,21 +1871,25 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
 
   if (behavior.kind === "riot-wedge") {
     const tank = model.tanks[shot.owner];
-    editWedge(
-      model.terrain,
-      { x: tank.x, y: tank.y - 5 },
-      shot.finalPoint,
-      behavior.tier === 1 ? 13 : 23,
-      "carve",
+    includeBounds(
+      editWedge(
+        model.terrain,
+        { x: tank.x, y: tank.y - 5 },
+        shot.finalPoint,
+        behavior.tier === 1 ? 13 : 23,
+        "carve",
+      ),
     );
     terrainChanged = true;
   }
 
   if (behavior.kind === "riot-bomb") {
-    model.terrain.carveCircle(
-      shot.finalPoint.x,
-      shot.finalPoint.y,
-      resolution.radius,
+    includeEdit(
+      model.terrain.carveCircle(
+        shot.finalPoint.x,
+        shot.finalPoint.y,
+        resolution.radius,
+      ),
     );
     terrainChanged = true;
   }
@@ -1657,21 +1900,25 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
         (segment) =>
           segment.style === "digger" && segment.startsAt >= 0.38,
       )?.path ?? [];
-    editAlongPath(
-      model.terrain,
-      tunnel,
-      3 + behavior.tier * 1.6,
-      "carve",
-      2,
+    includeBounds(
+      editAlongPath(
+        model.terrain,
+        tunnel,
+        3 + behavior.tier * 1.6,
+        "carve",
+        2,
+      ),
     );
     const endpointRadius = Math.max(
       7 + behavior.tier * 4,
       resolution.radius,
     );
-    model.terrain.carveCircle(
-      shot.finalPoint.x,
-      shot.finalPoint.y,
-      endpointRadius,
+    includeEdit(
+      model.terrain.carveCircle(
+        shot.finalPoint.x,
+        shot.finalPoint.y,
+        endpointRadius,
+      ),
     );
     explosionDamage(
       model,
@@ -1688,17 +1935,21 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       (segment) => segment.style === "sandhog",
     );
     undergroundPaths.forEach((segment, index) => {
-      editAlongPath(
-        model.terrain,
-        segment.path,
-        2.5 + behavior.tier,
-        "carve",
-        2,
+      includeBounds(
+        editAlongPath(
+          model.terrain,
+          segment.path,
+          2.5 + behavior.tier,
+          "carve",
+          2,
+        ),
       );
       const endpoint =
         segment.path[segment.path.length - 1] ?? shot.finalPoint;
       const radius = Math.max(8, resolution.radius);
-      model.terrain.carveCircle(endpoint.x, endpoint.y, radius);
+      includeEdit(
+        model.terrain.carveCircle(endpoint.x, endpoint.y, radius),
+      );
       explosionDamage(
         model,
         shot.owner,
@@ -1715,11 +1966,13 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "dirt-sphere") {
-    model.terrain.fillCircle(
-      shot.finalPoint.x,
-      shot.finalPoint.y - 10,
-      resolution.radius,
-      Material.Soil,
+    includeEdit(
+      model.terrain.fillCircle(
+        shot.finalPoint.x,
+        shot.finalPoint.y - 10,
+        resolution.radius,
+        Material.Soil,
+      ),
     );
     terrainChanged = true;
   }
@@ -1727,39 +1980,47 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   if (behavior.kind === "liquid-dirt") {
     shot.flowPoints.forEach((point, index) => {
       const depth = 4 + (index % 3) * 2;
-      model.terrain.fillCircle(
-        point.x,
-        point.y - depth * 0.4,
-        depth,
-        Material.Soil,
+      includeEdit(
+        model.terrain.fillCircle(
+          point.x,
+          point.y - depth * 0.4,
+          depth,
+          Material.Soil,
+        ),
       );
     });
-    model.terrain.settle({
-      maxPasses: 5,
-      maxMoves: 8_000,
-      movableMaterials: [Material.Soil],
-    });
+    includeEdit(
+      model.terrain.settle({
+        maxPasses: 5,
+        maxMoves: 8_000,
+        movableMaterials: [Material.Soil],
+      }),
+    );
     terrainChanged = true;
   }
 
   if (behavior.kind === "dirt-wedge") {
     const tank = model.tanks[shot.owner];
-    editWedge(
-      model.terrain,
-      { x: tank.x, y: tank.y - 8 },
-      shot.finalPoint,
-      18,
-      "fill",
+    includeBounds(
+      editWedge(
+        model.terrain,
+        { x: tank.x, y: tank.y - 8 },
+        shot.finalPoint,
+        18,
+        "fill",
+      ),
     );
     terrainChanged = true;
   }
 
   if (behavior.kind === "settle") {
-    model.terrain.settle({
-      maxPasses: 12,
-      maxMoves: 22_000,
-      movableMaterials: [Material.Soil],
-    });
+    includeEdit(
+      model.terrain.settle({
+        maxPasses: 12,
+        maxMoves: 22_000,
+        movableMaterials: [Material.Soil],
+      }),
+    );
     terrainChanged = true;
   }
 
@@ -1796,7 +2057,15 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
       (segment) => segment.style === "laser",
     );
     if (laserSegment) {
-      editAlongPath(model.terrain, laserSegment.path, 2.2, "carve", 1);
+      includeBounds(
+        editAlongPath(
+          model.terrain,
+          laserSegment.path,
+          2.2,
+          "carve",
+          1,
+        ),
+      );
       const start = laserSegment.path[0] ?? shot.origin;
       const end =
         laserSegment.path[laserSegment.path.length - 1] ?? shot.finalPoint;
@@ -1823,6 +2092,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
 
   if (terrainChanged) {
     model.terrainRevision += 1;
+    queueTerrainDirtyRegion(model, terrainDirtyBounds);
   }
 
   settleTanks(
@@ -1994,21 +2264,21 @@ function prepareNextRound(model: GameModel): void {
   model.round += 1;
   model.turn = 0;
   model.activePlayer = model.round % 2 === 0 ? 1 : 0;
-  model.terrain = generateTerrain(model.seed + model.round * 7_919, {
-    minSurfaceY: 245,
-    maxSurfaceY: 370,
-    roughness: 58,
-    caveCount: 5,
-    bedrockDepth: 46,
-  });
+  const battlefield = generateBattlefield(
+    model.seed + (model.round - 1) * 7_919,
+  );
+  model.terrain = battlefield.terrain;
   model.terrainRevision += 1;
+  queueFullTerrainRedraw(model);
   model.wind = nextWind(model.seed, model.round);
   model.roundWinner = null;
   model.lastRoundWasDraw = false;
 
   model.tanks.forEach((tank, index) => {
-    tank.x = index === 0 ? 155 : WORLD_WIDTH - 155;
-    tank.y = tankY(model.terrain, tank.x);
+    const spawn =
+      index === 0 ? battlefield.spawns[0] : battlefield.spawns[1];
+    tank.x = spawn.x;
+    tank.y = spawn.y;
     tank.maxHealth = 100 + tank.bonusHealth;
     tank.health = tank.maxHealth;
     tank.maxShield = shieldCapacity(tank.shieldId, tank.reserveShield);
@@ -2030,75 +2300,224 @@ function prepareNextRound(model: GameModel): void {
 function renderTerrain(
   terrain: TerrainGrid,
   revision: number,
+  dirtyRegion: TerrainBounds | "full" | null,
   cacheRef: { current: TerrainCache | null },
 ): HTMLCanvasElement {
   if (cacheRef.current?.revision === revision) {
     return cacheRef.current.canvas;
   }
 
-  const canvas =
-    cacheRef.current?.canvas ?? document.createElement("canvas");
-  canvas.width = terrain.width;
-  canvas.height = terrain.height;
+  const cached = cacheRef.current;
+  const canvas = cached?.canvas ?? document.createElement("canvas");
+  const dimensionsChanged =
+    canvas.width !== terrain.width || canvas.height !== terrain.height;
+  if (dimensionsChanged) {
+    canvas.width = terrain.width;
+    canvas.height = terrain.height;
+  }
   const context = canvas.getContext("2d", { alpha: true });
   if (!context) {
     return canvas;
   }
 
-  const image = context.createImageData(terrain.width, terrain.height);
-  const pixels = image.data;
+  const requestedRegion =
+    cached === null || dimensionsChanged || dirtyRegion === "full"
+      ? {
+          x: 0,
+          y: 0,
+          width: terrain.width,
+          height: terrain.height,
+        }
+      : dirtyRegion;
+  const left =
+    requestedRegion === null
+      ? 0
+      : clamp(Math.floor(requestedRegion.x), 0, terrain.width);
+  const top =
+    requestedRegion === null
+      ? 0
+      : clamp(Math.floor(requestedRegion.y), 0, terrain.height);
+  const right =
+    requestedRegion === null
+      ? 0
+      : clamp(
+          Math.ceil(requestedRegion.x + requestedRegion.width),
+          left,
+          terrain.width,
+        );
+  const bottom =
+    requestedRegion === null
+      ? 0
+      : clamp(
+          Math.ceil(requestedRegion.y + requestedRegion.height),
+          top,
+          terrain.height,
+        );
+  const region = {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
 
-  for (let y = 0; y < terrain.height; y += 1) {
-    for (let x = 0; x < terrain.width; x += 1) {
-      const material = terrain.cells[y * terrain.width + x] as Material;
-      if (material === Material.Empty) {
-        continue;
-      }
+  if (region.width > 0 && region.height > 0) {
+    context.clearRect(
+      region.x,
+      region.y,
+      region.width,
+      region.height,
+    );
+    const image = context.createImageData(region.width, region.height);
+    const pixels = image.data;
 
-      const offset = (y * terrain.width + x) * 4;
-      const noise = ((x * 17 + y * 31) % 19) - 9;
-      if (material === Material.Rock) {
-        pixels[offset] = 40 + noise;
-        pixels[offset + 1] = 48 + noise;
-        pixels[offset + 2] = 50 + noise;
-      } else {
-        pixels[offset] = 72 + noise;
-        pixels[offset + 1] = 74 + Math.floor(noise * 0.6);
-        pixels[offset + 2] = 54 + Math.floor(noise * 0.35);
+    for (let localY = 0; localY < region.height; localY += 1) {
+      const y = region.y + localY;
+      for (let localX = 0; localX < region.width; localX += 1) {
+        const x = region.x + localX;
+        const material = terrain.cells[
+          y * terrain.width + x
+        ] as Material;
+        if (material === Material.Empty) {
+          continue;
+        }
+
+        const offset = (localY * region.width + localX) * 4;
+        const noise = ((x * 17 + y * 31) % 19) - 9;
+        if (material === Material.Rock) {
+          pixels[offset] = 40 + noise;
+          pixels[offset + 1] = 48 + noise;
+          pixels[offset + 2] = 50 + noise;
+        } else {
+          pixels[offset] = 72 + noise;
+          pixels[offset + 1] = 74 + Math.floor(noise * 0.6);
+          pixels[offset + 2] = 54 + Math.floor(noise * 0.35);
+        }
+        pixels[offset + 3] = 255;
       }
-      pixels[offset + 3] = 255;
+    }
+
+    context.putImageData(image, region.x, region.y);
+
+    context.save();
+    context.globalCompositeOperation = "source-atop";
+    const soilShade = context.createLinearGradient(0, 230, 0, terrain.height);
+    soilShade.addColorStop(0, "rgba(216, 255, 69, 0.32)");
+    soilShade.addColorStop(0.06, "rgba(138, 147, 74, 0.10)");
+    soilShade.addColorStop(0.5, "rgba(8, 10, 11, 0.14)");
+    soilShade.addColorStop(1, "rgba(0, 0, 0, 0.52)");
+    context.fillStyle = soilShade;
+    context.fillRect(
+      region.x,
+      region.y,
+      region.width,
+      region.height,
+    );
+    context.restore();
+  }
+
+  const minimap = cached?.minimap ?? document.createElement("canvas");
+  const minimapDimensionsChanged =
+    minimap.width !== MINIMAP_BOUNDS.width ||
+    minimap.height !== MINIMAP_BOUNDS.height;
+  if (minimapDimensionsChanged) {
+    minimap.width = MINIMAP_BOUNDS.width;
+    minimap.height = MINIMAP_BOUNDS.height;
+  }
+  const minimapContext = minimap.getContext("2d");
+  if (minimapContext) {
+    const fullMinimapRedraw =
+      cached === null ||
+      dimensionsChanged ||
+      minimapDimensionsChanged ||
+      dirtyRegion === "full";
+    if (fullMinimapRedraw) {
+      minimapContext.clearRect(0, 0, minimap.width, minimap.height);
+      minimapContext.drawImage(
+        canvas,
+        0,
+        0,
+        terrain.width,
+        terrain.height,
+        0,
+        0,
+        minimap.width,
+        minimap.height,
+      );
+    } else if (region.width > 0 && region.height > 0) {
+      const scaleX = minimap.width / terrain.width;
+      const scaleY = minimap.height / terrain.height;
+      const destinationLeft = clamp(
+        Math.floor(region.x * scaleX) - 1,
+        0,
+        minimap.width,
+      );
+      const destinationTop = clamp(
+        Math.floor(region.y * scaleY) - 1,
+        0,
+        minimap.height,
+      );
+      const destinationRight = clamp(
+        Math.ceil((region.x + region.width) * scaleX) + 1,
+        destinationLeft,
+        minimap.width,
+      );
+      const destinationBottom = clamp(
+        Math.ceil((region.y + region.height) * scaleY) + 1,
+        destinationTop,
+        minimap.height,
+      );
+      const destinationWidth = destinationRight - destinationLeft;
+      const destinationHeight = destinationBottom - destinationTop;
+      const sourceX = destinationLeft / scaleX;
+      const sourceY = destinationTop / scaleY;
+      const sourceWidth = destinationWidth / scaleX;
+      const sourceHeight = destinationHeight / scaleY;
+
+      minimapContext.clearRect(
+        destinationLeft,
+        destinationTop,
+        destinationWidth,
+        destinationHeight,
+      );
+      minimapContext.drawImage(
+        canvas,
+        sourceX,
+        sourceY,
+        sourceWidth,
+        sourceHeight,
+        destinationLeft,
+        destinationTop,
+        destinationWidth,
+        destinationHeight,
+      );
     }
   }
 
-  context.putImageData(image, 0, 0);
-
-  context.globalCompositeOperation = "source-atop";
-  const soilShade = context.createLinearGradient(0, 230, 0, WORLD_HEIGHT);
-  soilShade.addColorStop(0, "rgba(216, 255, 69, 0.32)");
-  soilShade.addColorStop(0.06, "rgba(138, 147, 74, 0.10)");
-  soilShade.addColorStop(0.5, "rgba(8, 10, 11, 0.14)");
-  soilShade.addColorStop(1, "rgba(0, 0, 0, 0.52)");
-  context.fillStyle = soilShade;
-  context.fillRect(0, 0, terrain.width, terrain.height);
-  context.globalCompositeOperation = "source-over";
-
-  cacheRef.current = { canvas, revision };
+  cacheRef.current = { canvas, minimap, revision };
   return canvas;
 }
 
-function drawBackdrop(context: CanvasRenderingContext2D, now: number): void {
-  const sky = context.createLinearGradient(0, 0, 0, WORLD_HEIGHT);
+function drawBackdrop(
+  context: CanvasRenderingContext2D,
+  now: number,
+  camera: CameraState,
+): void {
+  const sky = context.createLinearGradient(0, 0, 0, VIEWPORT_HEIGHT);
   sky.addColorStop(0, "#07090a");
   sky.addColorStop(0.58, "#101719");
   sky.addColorStop(1, "#1b1d18");
   context.fillStyle = sky;
-  context.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+  context.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
 
   context.save();
   context.globalAlpha = 0.25;
   for (let index = 0; index < 56; index += 1) {
-    const x = (index * 173 + 41) % WORLD_WIDTH;
-    const y = (index * 71 + 27) % 238;
+    const x =
+      ((index * 173 + 41 - camera.center.x * 0.14) %
+        (VIEWPORT_WIDTH + 140)) -
+      70;
+    const y =
+      ((index * 71 + 27 - camera.center.y * 0.025) % 250) - 6;
     const pulse = 0.45 + Math.sin(now * 0.0007 + index) * 0.2;
     context.fillStyle = index % 7 === 0 ? "#68e5ef" : "#f1f3e9";
     context.globalAlpha = pulse;
@@ -2106,21 +2525,97 @@ function drawBackdrop(context: CanvasRenderingContext2D, now: number): void {
   }
   context.restore();
 
-  const glow = context.createRadialGradient(760, 92, 2, 760, 92, 105);
+  const glowCenterX =
+    ((760 - camera.center.x * 0.08) % (VIEWPORT_WIDTH + 260)) - 80;
+  const glow = context.createRadialGradient(
+    glowCenterX,
+    92,
+    2,
+    glowCenterX,
+    92,
+    105,
+  );
   glow.addColorStop(0, "rgba(216,255,69,0.20)");
   glow.addColorStop(0.22, "rgba(216,255,69,0.08)");
   glow.addColorStop(1, "rgba(216,255,69,0)");
   context.fillStyle = glow;
-  context.fillRect(650, 0, 220, 205);
+  context.fillRect(glowCenterX - 110, 0, 220, 205);
 
   context.strokeStyle = "rgba(104,229,239,0.045)";
   context.lineWidth = 1;
-  for (let x = 0; x <= WORLD_WIDTH; x += 48) {
+  const gridOffset = -(camera.center.x * 0.08) % 48;
+  for (
+    let x = gridOffset - 48;
+    x <= VIEWPORT_WIDTH + 48;
+    x += 48
+  ) {
     context.beginPath();
     context.moveTo(x, 0);
-    context.lineTo(x, WORLD_HEIGHT);
+    context.lineTo(x, VIEWPORT_HEIGHT);
     context.stroke();
   }
+}
+
+function drawMinimap(
+  context: CanvasRenderingContext2D,
+  terrainOverview: HTMLCanvasElement,
+  model: GameModel,
+  camera: CameraState,
+): void {
+  const { x, y, width, height } = MINIMAP_BOUNDS;
+  const scaleX = width / model.terrain.width;
+  const scaleY = height / model.terrain.height;
+  const visibleWidth = VIEWPORT_WIDTH / camera.zoom;
+  const visibleHeight = VIEWPORT_HEIGHT / camera.zoom;
+
+  context.save();
+  context.shadowColor = "rgba(0, 0, 0, 0.42)";
+  context.shadowBlur = 14;
+  context.fillStyle = "rgba(5, 13, 18, 0.84)";
+  context.beginPath();
+  context.roundRect(x - 5, y - 5, width + 10, height + 10, 9);
+  context.fill();
+  context.shadowBlur = 0;
+
+  context.save();
+  context.beginPath();
+  context.roundRect(x, y, width, height, 5);
+  context.clip();
+  context.fillStyle = "#11191b";
+  context.fillRect(x, y, width, height);
+  context.globalAlpha = 0.86;
+  context.drawImage(terrainOverview, x, y, width, height);
+  context.globalAlpha = 1;
+
+  for (const tank of model.tanks) {
+    context.fillStyle = tank.color;
+    context.beginPath();
+    context.arc(
+      x + tank.x * scaleX,
+      y + tank.y * scaleY,
+      3.2,
+      0,
+      Math.PI * 2,
+    );
+    context.fill();
+  }
+
+  context.strokeStyle = "rgba(241, 243, 233, 0.95)";
+  context.lineWidth = 1.5;
+  context.strokeRect(
+    x + (camera.center.x - visibleWidth / 2) * scaleX,
+    y + (camera.center.y - visibleHeight / 2) * scaleY,
+    visibleWidth * scaleX,
+    visibleHeight * scaleY,
+  );
+  context.restore();
+
+  context.strokeStyle = "rgba(104, 229, 239, 0.5)";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.roundRect(x - 5, y - 5, width + 10, height + 10, 9);
+  context.stroke();
+  context.restore();
 }
 
 function cameraShakeOffset(
@@ -3355,7 +3850,7 @@ function drawShot(
     context.lineWidth = 1.5;
     context.globalAlpha = 0.35 * (1 - fallProgress * 0.45);
     for (let index = 0; index < lineCount; index += 1) {
-      const x = ((index * 79 + shot.seed) % (WORLD_WIDTH - 30)) + 15;
+      const x = ((index * 79 + shot.seed) % (model.terrain.width - 30)) + 15;
       const startY = ((index * 31) % 130) - 30 + fallProgress * 260;
       context.beginPath();
       context.moveTo(x, startY);
@@ -3773,8 +4268,8 @@ function shieldStyle(color: string): CSSProperties {
   return { "--shield-color": color } as CSSProperties;
 }
 
-function audioPanForX(x: number): number {
-  return clamp((x / WORLD_WIDTH) * 2 - 1, -1, 1);
+function audioPanForX(x: number, terrainWidth = WORLD_WIDTH): number {
+  return clamp((x / terrainWidth) * 2 - 1, -1, 1);
 }
 
 function audioMaterialAtImpact(
@@ -3823,7 +4318,27 @@ function causesTerrainCollapse(shot: ShotVisual): boolean {
 export default function ScorchedGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const terrainCacheRef = useRef<TerrainCache | null>(null);
-  const gameRef = useRef<GameModel>(createGame());
+  const gameRef = useRef<GameModel>(null!);
+  if (gameRef.current === null) {
+    gameRef.current = createGame();
+  }
+  const cameraRef = useRef<CameraState>(null!);
+  if (cameraRef.current === null) {
+    cameraRef.current = createCamera(
+      cameraTargetForTank(
+        gameRef.current.tanks[gameRef.current.activePlayer],
+      ),
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(gameRef.current.terrain),
+    );
+  }
+  const cameraModeRef = useRef<"auto" | "manual">("auto");
+  const pointerGestureRef = useRef<CameraGesture>({
+    pointers: new Map(),
+    pinchDistance: null,
+    pinchMidpoint: null,
+    minimapPointerId: null,
+  });
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const particlePoolRef = useRef<Particle[]>([]);
@@ -3899,6 +4414,224 @@ export default function ScorchedGame() {
   const refresh = useCallback(() => {
     setRevision((revision) => revision + 1);
   }, []);
+
+  const recenterCamera = useCallback(() => {
+    const game = gameRef.current;
+    cameraModeRef.current = "auto";
+    cameraRef.current = createCamera(
+      cameraTargetForTank(game.tanks[game.activePlayer]),
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(game.terrain),
+      cameraRef.current.zoom,
+    );
+  }, []);
+
+  const panCameraPage = useCallback((direction: -1 | 1) => {
+    const game = gameRef.current;
+    cameraModeRef.current = "manual";
+    cameraRef.current = panCameraByScreenDelta(
+      cameraRef.current,
+      {
+        x: -direction * VIEWPORT_WIDTH * 0.68,
+        y: 0,
+      },
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(game.terrain),
+    );
+  }, []);
+
+  const changeCameraZoom = useCallback((factor: number) => {
+    const game = gameRef.current;
+    cameraModeRef.current = "manual";
+    cameraRef.current = zoomCameraAtScreenPoint(
+      cameraRef.current,
+      cameraRef.current.zoom * factor,
+      {
+        x: VIEWPORT_WIDTH / 2,
+        y: VIEWPORT_HEIGHT / 2,
+      },
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(game.terrain),
+    );
+  }, []);
+
+  const handleCanvasPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+
+      const canvas = event.currentTarget;
+      const point = canvasPointFromClient(
+        canvas,
+        event.clientX,
+        event.clientY,
+      );
+      const gesture = pointerGestureRef.current;
+
+      canvas.setPointerCapture(event.pointerId);
+      cameraModeRef.current = "manual";
+
+      if (pointInsideMinimap(point)) {
+        gesture.minimapPointerId = event.pointerId;
+        const terrain = gameRef.current.terrain;
+        cameraRef.current = clampCamera(
+          {
+            center: minimapPointToWorld(point, terrain),
+            zoom: cameraRef.current.zoom,
+          },
+          CAMERA_VIEWPORT,
+          cameraWorldForTerrain(terrain),
+        );
+        return;
+      }
+
+      gesture.pointers.set(event.pointerId, point);
+      const points = [...gesture.pointers.values()];
+      if (points.length >= 2) {
+        gesture.pinchDistance = pointerDistance(
+          points[0] as Vector2,
+          points[1] as Vector2,
+        );
+        gesture.pinchMidpoint = pointerMidpoint(
+          points[0] as Vector2,
+          points[1] as Vector2,
+        );
+      }
+    },
+    [],
+  );
+
+  const handleCanvasPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      const gesture = pointerGestureRef.current;
+      const point = canvasPointFromClient(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+      );
+      const terrain = gameRef.current.terrain;
+      const world = cameraWorldForTerrain(terrain);
+
+      if (gesture.minimapPointerId === event.pointerId) {
+        cameraRef.current = clampCamera(
+          {
+            center: minimapPointToWorld(point, terrain),
+            zoom: cameraRef.current.zoom,
+          },
+          CAMERA_VIEWPORT,
+          world,
+        );
+        return;
+      }
+
+      const previous = gesture.pointers.get(event.pointerId);
+      if (!previous) {
+        return;
+      }
+      gesture.pointers.set(event.pointerId, point);
+      const points = [...gesture.pointers.values()];
+
+      if (points.length === 1) {
+        gesture.pinchDistance = null;
+        gesture.pinchMidpoint = null;
+        cameraRef.current = panCameraByScreenDelta(
+          cameraRef.current,
+          {
+            x: point.x - previous.x,
+            y: point.y - previous.y,
+          },
+          CAMERA_VIEWPORT,
+          world,
+        );
+        return;
+      }
+
+      const first = points[0] as Vector2;
+      const second = points[1] as Vector2;
+      const distance = Math.max(1, pointerDistance(first, second));
+      const midpoint = pointerMidpoint(first, second);
+      const previousDistance = gesture.pinchDistance;
+      const previousMidpoint = gesture.pinchMidpoint;
+
+      if (previousDistance !== null && previousMidpoint !== null) {
+        const panned = panCameraByScreenDelta(
+          cameraRef.current,
+          {
+            x: midpoint.x - previousMidpoint.x,
+            y: midpoint.y - previousMidpoint.y,
+          },
+          CAMERA_VIEWPORT,
+          world,
+        );
+        cameraRef.current = zoomCameraAtScreenPoint(
+          panned,
+          panned.zoom * (distance / previousDistance),
+          midpoint,
+          CAMERA_VIEWPORT,
+          world,
+        );
+      }
+
+      gesture.pinchDistance = distance;
+      gesture.pinchMidpoint = midpoint;
+    },
+    [],
+  );
+
+  const releaseCanvasPointer = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      const gesture = pointerGestureRef.current;
+      gesture.pointers.delete(event.pointerId);
+      if (gesture.minimapPointerId === event.pointerId) {
+        gesture.minimapPointerId = null;
+      }
+      if (gesture.pointers.size < 2) {
+        gesture.pinchDistance = null;
+        gesture.pinchMidpoint = null;
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+
+  const handleCanvasWheel = useCallback(
+    (event: ReactWheelEvent<HTMLCanvasElement>) => {
+      event.preventDefault();
+      const terrain = gameRef.current.terrain;
+      const world = cameraWorldForTerrain(terrain);
+      const point = canvasPointFromClient(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+      );
+      cameraModeRef.current = "manual";
+
+      if (event.ctrlKey || event.metaKey) {
+        cameraRef.current = zoomCameraAtScreenPoint(
+          cameraRef.current,
+          cameraRef.current.zoom * Math.exp(-event.deltaY * 0.0025),
+          point,
+          CAMERA_VIEWPORT,
+          world,
+        );
+        return;
+      }
+
+      cameraRef.current = panCameraByScreenDelta(
+        cameraRef.current,
+        {
+          x: -(event.shiftKey ? event.deltaY : event.deltaX),
+          y: -(event.shiftKey ? 0 : event.deltaY),
+        },
+        CAMERA_VIEWPORT,
+        world,
+      );
+    },
+    [],
+  );
 
   const handleAudioContextState = useCallback(
     (state: RuntimeAudioContextState) => {
@@ -4287,6 +5020,7 @@ export default function ScorchedGame() {
     }
 
     shotRef.current = null;
+    cameraModeRef.current = "auto";
     refresh();
   }, [playUiAudio, refresh, resetTransientSelectorsForTurnChange]);
 
@@ -4316,24 +5050,69 @@ export default function ScorchedGame() {
         );
       }
 
-      drawBackdrop(context, now);
-      const cameraShot = shotRef.current;
-      const cameraProgress = cameraShot
-        ? clamp(cameraShot.elapsedMs / cameraShot.duration, 0, 1)
+      const shot = shotRef.current;
+      if (shot && !game.paused) {
+        shot.elapsedMs += delta * 1_000;
+      }
+      const cameraProgress = shot
+        ? clamp(shot.elapsedMs / shot.duration, 0, 1)
         : 0;
+      const world = cameraWorldForTerrain(game.terrain);
+
+      if (cameraModeRef.current === "auto") {
+        const focusPoint = shot
+          ? shotCameraTarget(shot, cameraProgress)
+          : game.phase === "aiming" || game.phase === "intro"
+            ? cameraTargetForTank(game.tanks[game.activePlayer])
+            : null;
+        if (focusPoint) {
+          cameraRef.current = moveCameraToward(
+            cameraRef.current,
+            focusPoint,
+            delta,
+            CAMERA_VIEWPORT,
+            world,
+            game.reducedMotion ? 18 : shot ? 9.5 : 7,
+          );
+        }
+      } else {
+        cameraRef.current = clampCamera(
+          cameraRef.current,
+          CAMERA_VIEWPORT,
+          world,
+        );
+      }
+      const camera = cameraRef.current;
+
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      drawBackdrop(context, now, camera);
       const cameraOffset = cameraShakeOffset(
-        cameraShot,
+        shot,
         cameraProgress,
         game,
       );
       context.save();
-      context.translate(cameraOffset.x, cameraOffset.y);
+      context.beginPath();
+      context.rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+      context.clip();
+      context.translate(
+        VIEWPORT_WIDTH / 2 + cameraOffset.x,
+        VIEWPORT_HEIGHT / 2 + cameraOffset.y,
+      );
+      context.scale(camera.zoom, camera.zoom);
+      context.translate(-camera.center.x, -camera.center.y);
 
       const terrainCanvas = renderTerrain(
         game.terrain,
         game.terrainRevision,
+        game.terrainDirtyRegion,
         terrainCacheRef,
       );
+      if (
+        terrainCacheRef.current?.revision === game.terrainRevision
+      ) {
+        game.terrainDirtyRegion = null;
+      }
       context.drawImage(terrainCanvas, 0, 0);
 
       drawTank(
@@ -4349,12 +5128,8 @@ export default function ScorchedGame() {
         now,
       );
 
-      const shot = shotRef.current;
       if (shot) {
-        if (!game.paused) {
-          shot.elapsedMs += delta * 1_000;
-        }
-        const progress = clamp(shot.elapsedMs / shot.duration, 0, 1);
+        const progress = cameraProgress;
         drawShot(context, shot, progress, game, now);
 
         if (!game.paused && !shot.resolved && progress >= shot.resolvedAt) {
@@ -4389,7 +5164,7 @@ export default function ScorchedGame() {
                 bucket: damageBucket(amount, tank.maxHealth),
                 direct,
                 destroyed: tank.health <= 0,
-                pan: audioPanForX(tank.x),
+                pan: audioPanForX(tank.x, game.terrain.width),
               },
             ];
           });
@@ -4403,7 +5178,7 @@ export default function ScorchedGame() {
                   {
                     distance,
                     destroyed: tank.health <= 0,
-                    pan: audioPanForX(tank.x),
+                    pan: audioPanForX(tank.x, game.terrain.width),
                   },
                 ]
               : [];
@@ -4413,7 +5188,7 @@ export default function ScorchedGame() {
             return previous / tank.maxHealth > 0.3 &&
               tank.health / tank.maxHealth <= 0.3 &&
               tank.health > 0
-              ? [{ pan: audioPanForX(tank.x) }]
+              ? [{ pan: audioPanForX(tank.x, game.terrain.width) }]
               : [];
           });
           void playAudioEvent({
@@ -4429,7 +5204,10 @@ export default function ScorchedGame() {
             shieldEvents: game.shieldEvents.map(({ event }) => event),
             terrainCollapse: causesTerrainCollapse(shot),
             fizzled: shot.fizzled,
-            pan: audioPanForX(shot.finalPoint.x),
+            pan: audioPanForX(
+              shot.finalPoint.x,
+              game.terrain.width,
+            ),
             seed: shot.seed,
           });
           refresh();
@@ -4442,6 +5220,12 @@ export default function ScorchedGame() {
 
       drawParticles(context, particlesRef.current);
       context.restore();
+      drawMinimap(
+        context,
+        terrainCacheRef.current?.minimap ?? terrainCanvas,
+        game,
+        cameraRef.current,
+      );
       frameRef.current = requestAnimationFrame(renderFrame);
     };
 
@@ -4501,7 +5285,10 @@ export default function ScorchedGame() {
       }
       tank.selectedExperimental = null;
       game.message = weaponStatus(weaponId);
-      playUiAudio("weapon-select", audioPanForX(tank.x));
+      playUiAudio(
+        "weapon-select",
+        audioPanForX(tank.x, game.terrain.width),
+      );
       refresh();
     },
     [playUiAudio, refresh],
@@ -4541,7 +5328,10 @@ export default function ScorchedGame() {
       game.message =
         `${ultimate.name}: Experimental Showcase, бесконечный доступ. ` +
         `${ultimate.description}`;
-      playUiAudio("weapon-select", audioPanForX(tank.x));
+      playUiAudio(
+        "weapon-select",
+        audioPanForX(tank.x, game.terrain.width),
+      );
       closeWeaponSelector("committed");
       refresh();
     },
@@ -4623,7 +5413,10 @@ export default function ScorchedGame() {
       game.message = `${tank.name}: выбран ${shield.name}, заряд ${Math.ceil(
         tank.shield,
       )}. Выбор второго пилота останется независимым.`;
-      playUiAudio("shield-select", audioPanForX(tank.x));
+      playUiAudio(
+        "shield-select",
+        audioPanForX(tank.x, game.terrain.width),
+      );
       closeShieldSelector("committed");
       refresh();
     },
@@ -4729,6 +5522,7 @@ export default function ScorchedGame() {
       ? buildExperimentalShot(game, owner, weaponId)
       : buildShot(game, owner, weaponId);
     shotRef.current = shot;
+    cameraModeRef.current = "auto";
     game.phase = "firing";
     audioRef.current?.setMusicState("flight");
     game.message = `${tank.name} запускает «${
@@ -4747,7 +5541,7 @@ export default function ScorchedGame() {
         (impactTime) => impactTime * shot.duration,
       ),
       fizzled: shot.fizzled,
-      pan: audioPanForX(shot.finalPoint.x),
+      pan: audioPanForX(shot.finalPoint.x, game.terrain.width),
       seed: shot.seed,
     });
   }, [playAudioEvent, refresh]);
@@ -4871,7 +5665,14 @@ export default function ScorchedGame() {
   const startMatch = useCallback(() => {
     const game = gameRef.current;
     const audioActivation = ensureAudio();
+    cameraModeRef.current = "auto";
     game.phase = "aiming";
+    cameraRef.current = createCamera(
+      cameraTargetForTank(game.tanks[game.activePlayer]),
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(game.terrain),
+      cameraRef.current.zoom,
+    );
     game.message = isInfiniteArsenalMode(game.mode)
       ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите каноническое оружие или Experimental Ultimate.`
       : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
@@ -4904,6 +5705,7 @@ export default function ScorchedGame() {
       playUiAudio("shop-open");
     } else {
       prepareNextRound(game);
+      cameraModeRef.current = "auto";
       audioRef.current?.setMusicState("aiming");
       playUiAudio("round-start");
     }
@@ -5020,6 +5822,7 @@ export default function ScorchedGame() {
       playUiAudio("turn-change");
     } else {
       prepareNextRound(game);
+      cameraModeRef.current = "auto";
       audioRef.current?.setMusicState("aiming");
       playUiAudio("round-start");
     }
@@ -5052,6 +5855,14 @@ export default function ScorchedGame() {
     gameRef.current.audioDiagnostic = previous.audioDiagnostic;
     gameRef.current.reducedMotion = previous.reducedMotion;
     gameRef.current.effectLevel = previous.effectLevel;
+    cameraRef.current = createCamera(
+      cameraTargetForTank(
+        gameRef.current.tanks[gameRef.current.activePlayer],
+      ),
+      CAMERA_VIEWPORT,
+      cameraWorldForTerrain(gameRef.current.terrain),
+    );
+    cameraModeRef.current = "auto";
     shotRef.current = null;
     particlesRef.current = [];
     particlePoolRef.current = [];
@@ -5256,12 +6067,75 @@ export default function ScorchedGame() {
       <canvas
         ref={canvasRef}
         className={styles.canvas}
-        width={WORLD_WIDTH}
-        height={WORLD_HEIGHT}
+        width={VIEWPORT_WIDTH}
+        height={VIEWPORT_HEIGHT}
         tabIndex={-1}
         data-game-keyboard-owner="aiming"
-        aria-label="Артиллерийское поле с двумя танками и разрушаемым рельефом"
+        onPointerDown={handleCanvasPointerDown}
+        onPointerMove={handleCanvasPointerMove}
+        onPointerUp={releaseCanvasPointer}
+        onPointerCancel={releaseCanvasPointer}
+        onLostPointerCapture={releaseCanvasPointer}
+        onWheel={handleCanvasWheel}
+        aria-label="Большое артиллерийское поле. Тяните для прокрутки, используйте pinch или Control с колесом для масштаба."
       />
+
+      {(model.phase === "aiming" || model.phase === "firing") && (
+        <div
+          className={styles.cameraHud}
+          role="group"
+          aria-label="Управление камерой"
+        >
+          <span className={styles.cameraMeta}>
+            Карта {model.terrain.width}×{model.terrain.height}
+          </span>
+          <button
+            type="button"
+            className={styles.cameraButton}
+            onClick={() => panCameraPage(-1)}
+            aria-label="Прокрутить карту влево"
+            title="Карта влево"
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            className={styles.cameraButton}
+            onClick={recenterCamera}
+            aria-label="Вернуть камеру к активному танку"
+            title="К активному танку"
+          >
+            ◎
+          </button>
+          <button
+            type="button"
+            className={styles.cameraButton}
+            onClick={() => panCameraPage(1)}
+            aria-label="Прокрутить карту вправо"
+            title="Карта вправо"
+          >
+            →
+          </button>
+          <button
+            type="button"
+            className={styles.cameraButton}
+            onClick={() => changeCameraZoom(1 / 1.16)}
+            aria-label="Отдалить карту"
+            title="Отдалить"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className={styles.cameraButton}
+            onClick={() => changeCameraZoom(1.16)}
+            aria-label="Приблизить карту"
+            title="Приблизить"
+          >
+            +
+          </button>
+        </div>
+      )}
 
       <div className={styles.topHud} aria-live="polite">
         {model.tanks.map((tank, index) => (

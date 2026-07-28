@@ -761,8 +761,20 @@ function moveTank(
   atMs: number,
 ): void {
   const from = { x: tank.x, y: tank.y };
+  const previousBottom = tank.y + 11;
+  const previousSurface = terrain.surfaceY(tank.x);
+  const wasBelowSurface =
+    previousSurface !== null && previousBottom > previousSurface + 1;
   tank.x = clamp(nextX, 12, terrain.width - 12);
-  tank.y = (terrain.surfaceY(tank.x) ?? terrain.height - 12) - 11;
+  const support = wasBelowSurface
+    ? terrain.firstSolidYAtOrBelow(tank.x, previousBottom)
+    : terrain.surfaceY(tank.x);
+  if (support === null) {
+    damageTank(events, tank, tank.health, atMs);
+    tank.y = terrain.height + 30;
+  } else {
+    tank.y = support - 11;
+  }
   events.push({
     type: "tank-displaced",
     atMs,
@@ -774,11 +786,19 @@ function moveTank(
 }
 
 function settleTankHeights(
+  events: ExperimentalEvent[],
   terrain: TerrainGrid,
   tanks: MutableExperimentalTank[],
+  atMs: number,
 ): void {
   for (const tank of tanks) {
-    tank.y = (terrain.surfaceY(tank.x) ?? terrain.height - 12) - 11;
+    const support = terrain.firstSolidYAtOrBelow(tank.x, tank.y + 11);
+    if (support === null) {
+      damageTank(events, tank, tank.health, atMs);
+      tank.y = terrain.height + 30;
+    } else {
+      tank.y = support - 11;
+    }
   }
 }
 
@@ -1075,7 +1095,7 @@ export function resolveExperimentalUltimate(
         movableMaterials: [Material.Soil],
       });
       terrainEvent(events, 2_720, "settle", settle);
-      settleTankHeights(terrain, tanks);
+      settleTankHeights(events, terrain, tanks, 2_720);
       break;
     }
     case "auroraCage": {
@@ -1156,7 +1176,12 @@ export function resolveExperimentalUltimate(
     }
   }
 
-  settleTankHeights(terrain, tanks);
+  settleTankHeights(
+    events,
+    terrain,
+    tanks,
+    definition.resolutionMs - 500,
+  );
   events.push({
     type: "phase",
     atMs: definition.resolutionMs - 500,

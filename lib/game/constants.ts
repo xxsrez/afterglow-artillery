@@ -1,9 +1,16 @@
 /**
- * Logical world dimensions. Rendering is free to scale this coordinate space
- * to any CSS or device-pixel size.
+ * Full logical battlefield dimensions used by simulation, terrain generation
+ * and world-space presentation.
  */
-export const WORLD_WIDTH = 960;
-export const WORLD_HEIGHT = 540;
+export const WORLD_WIDTH = 2_880;
+export const WORLD_HEIGHT = 720;
+
+/**
+ * Visible logical viewport. Presentation may pan and zoom over the larger
+ * battlefield while keeping a stable control surface for HUD and touch input.
+ */
+export const VIEWPORT_WIDTH = 960;
+export const VIEWPORT_HEIGHT = 540;
 
 /** Prototype physics defaults expressed in logical world units. */
 export const DEFAULT_GRAVITY = 180;

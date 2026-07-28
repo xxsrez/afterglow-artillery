@@ -44,7 +44,22 @@ export interface TerrainGenerationOptions {
   readonly controlPointSpacing?: number;
   readonly roughness?: number;
   readonly caveCount?: number;
+  readonly tunnelCount?: number;
   readonly bedrockDepth?: number;
+}
+
+export interface SpawnSite {
+  readonly x: number;
+  readonly y: number;
+}
+
+export interface SpawnSiteOptions {
+  readonly count?: number;
+  readonly edgeMargin?: number;
+  readonly minSeparation?: number;
+  readonly padHalfWidth?: number;
+  readonly maxSurfaceDelta?: number;
+  readonly tankHalfHeight?: number;
 }
 
 interface MutableBounds {
@@ -72,6 +87,14 @@ function clamp(value: number, min: number, max: number): number {
 
 function smoothStep(value: number): number {
   return value * value * (3 - 2 * value);
+}
+
+function average(values: readonly number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 /**
@@ -117,6 +140,475 @@ function finalizeBounds(bounds: MutableBounds | null): TerrainBounds | null {
     width: bounds.maxX - bounds.minX + 1,
     height: bounds.maxY - bounds.minY + 1,
   };
+}
+
+function carveBlob(
+  terrain: TerrainGrid,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  random: SeededRandom,
+): void {
+  terrain.carveCircle(centerX, centerY, radius);
+
+  const lobeCount = random.integer(1, 3);
+  for (let lobe = 0; lobe < lobeCount; lobe += 1) {
+    const angle = random.float(0, Math.PI * 2);
+    const offset = radius * random.float(0.45, 0.95);
+    terrain.carveCircle(
+      centerX + Math.cos(angle) * offset,
+      centerY + Math.sin(angle) * offset * random.float(0.72, 1.12),
+      radius * random.float(0.52, 0.88),
+    );
+  }
+}
+
+interface CavePoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Overlapping discs form a guaranteed connected passage. The perpendicular
+ * wobble gives the tunnel an organic silhouette without ever breaking the
+ * traversable empty-space chain.
+ */
+function carvePassage(
+  terrain: TerrainGrid,
+  random: SeededRandom,
+  from: CavePoint,
+  to: CavePoint,
+  minRadius: number,
+  maxRadius: number,
+): void {
+  const deltaX = to.x - from.x;
+  const deltaY = to.y - from.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  const stepLength = Math.max(2.5, minRadius * 0.72);
+  const steps = Math.max(1, Math.ceil(distance / stepLength));
+  const normalX = distance === 0 ? 0 : -deltaY / distance;
+  const normalY = distance === 0 ? 0 : deltaX / distance;
+  const wobblePhase = random.float(0, Math.PI * 2);
+  const wobbleAmplitude = Math.min(
+    maxRadius * 0.65,
+    Math.max(1, distance * 0.035),
+  );
+
+  for (let step = 0; step <= steps; step += 1) {
+    const progress = step / steps;
+    const taper = Math.sin(progress * Math.PI);
+    const wobble =
+      Math.sin(progress * Math.PI * 3 + wobblePhase) *
+      wobbleAmplitude *
+      taper;
+    const x = from.x + deltaX * progress + normalX * wobble;
+    const y = from.y + deltaY * progress + normalY * wobble;
+    const radius = clamp(
+      minRadius +
+        (maxRadius - minRadius) *
+          (0.35 + 0.4 * Math.sin(progress * Math.PI)) +
+        random.float(-0.65, 0.65),
+      minRadius,
+      maxRadius,
+    );
+
+    terrain.carveCircle(x, y, radius);
+  }
+}
+
+/**
+ * Builds one to three internally connected cave graphs. Every graph has a
+ * sloped surface mouth, a chain of chambers and additional branch passages.
+ */
+function carveCaveNetworks(
+  terrain: TerrainGrid,
+  random: SeededRandom,
+  surfaceProfile: readonly number[],
+  caveCount: number,
+  tunnelCount: number,
+  bedrockStart: number,
+): void {
+  if (caveCount === 0 && tunnelCount === 0) {
+    return;
+  }
+
+  const smallestDimension = Math.min(terrain.width, terrain.height);
+  const passageMinRadius = Math.max(3.5, smallestDimension * 0.009);
+  const passageMaxRadius = Math.max(
+    passageMinRadius + 1.5,
+    smallestDimension * 0.017,
+  );
+  const chamberMinRadius = Math.max(7, smallestDimension * 0.024);
+  const chamberMaxRadius = Math.max(
+    chamberMinRadius + 2,
+    smallestDimension * 0.052,
+  );
+  const horizontalMargin = Math.max(12, Math.round(terrain.width * 0.025));
+  const networkCount = Math.max(
+    1,
+    Math.min(3, Math.ceil(Math.max(1, caveCount) / 4)),
+  );
+  const availableWidth = terrain.width - horizontalMargin * 2;
+  const bandWidth = availableWidth / networkCount;
+
+  for (let network = 0; network < networkCount; network += 1) {
+    const bandLeft = horizontalMargin + bandWidth * network;
+    const bandRight = horizontalMargin + bandWidth * (network + 1);
+    const entranceInset = Math.min(18, Math.max(3, bandWidth * 0.12));
+    const entranceMinX = Math.ceil(bandLeft + entranceInset);
+    const entranceMaxX = Math.floor(bandRight - entranceInset);
+    const entranceX =
+      entranceMaxX > entranceMinX
+        ? random.integer(entranceMinX, entranceMaxX + 1)
+        : Math.round((bandLeft + bandRight) / 2);
+    const entranceSurface =
+      surfaceProfile[entranceX] ??
+      terrain.surfaceY(entranceX) ??
+      Math.round(terrain.height * 0.48);
+    const cavernBottom = Math.max(
+      entranceSurface + 6,
+      bedrockStart - Math.ceil(chamberMaxRadius) - 3,
+    );
+    const rootDepth = Math.max(
+      passageMaxRadius * 3,
+      Math.min(terrain.height * 0.12, 74),
+    );
+    const root: CavePoint = {
+      x: clamp(
+        entranceX + random.float(-bandWidth * 0.08, bandWidth * 0.08),
+        bandLeft + chamberMinRadius,
+        bandRight - chamberMinRadius,
+      ),
+      y: clamp(
+        entranceSurface + rootDepth,
+        entranceSurface + passageMaxRadius * 2,
+        cavernBottom,
+      ),
+    };
+    const mouth: CavePoint = {
+      x: entranceX,
+      y: Math.max(0, entranceSurface - passageMaxRadius - 2),
+    };
+
+    carvePassage(
+      terrain,
+      random,
+      mouth,
+      root,
+      passageMinRadius,
+      passageMaxRadius,
+    );
+    carveBlob(
+      terrain,
+      root.x,
+      root.y,
+      random.float(chamberMinRadius, chamberMaxRadius),
+      random,
+    );
+
+    const nodes: CavePoint[] = [root];
+    const chambersInNetwork =
+      Math.floor(caveCount / networkCount) +
+      (network < caveCount % networkCount ? 1 : 0);
+    let previous = root;
+
+    for (let chamber = 1; chamber < Math.max(1, chambersInNetwork); chamber += 1) {
+      const direction = chamber % 2 === 0 ? -1 : 1;
+      const horizontalReach = random.float(
+        Math.max(24, bandWidth * 0.12),
+        Math.max(28, bandWidth * 0.32),
+      );
+      const next: CavePoint = {
+        x: clamp(
+          previous.x + direction * horizontalReach,
+          bandLeft + chamberMaxRadius,
+          bandRight - chamberMaxRadius,
+        ),
+        y: clamp(
+          previous.y + random.float(-terrain.height * 0.08, terrain.height * 0.1),
+          entranceSurface + passageMaxRadius * 2,
+          cavernBottom,
+        ),
+      };
+
+      carvePassage(
+        terrain,
+        random,
+        previous,
+        next,
+        passageMinRadius,
+        passageMaxRadius,
+      );
+      carveBlob(
+        terrain,
+        next.x,
+        next.y,
+        random.float(chamberMinRadius, chamberMaxRadius),
+        random,
+      );
+      nodes.push(next);
+      previous = next;
+    }
+
+    const branchesInNetwork =
+      Math.floor(tunnelCount / networkCount) +
+      (network < tunnelCount % networkCount ? 1 : 0);
+
+    for (let branch = 0; branch < branchesInNetwork; branch += 1) {
+      const anchor = random.pick(nodes);
+      const branchDirection = branch % 2 === 0 ? -1 : 1;
+      const endpoint: CavePoint = {
+        x: clamp(
+          anchor.x +
+            branchDirection *
+              random.float(
+                Math.max(18, bandWidth * 0.07),
+                Math.max(24, bandWidth * 0.2),
+              ),
+          bandLeft + passageMaxRadius,
+          bandRight - passageMaxRadius,
+        ),
+        y: clamp(
+          anchor.y + random.float(-terrain.height * 0.09, terrain.height * 0.11),
+          entranceSurface + passageMaxRadius,
+          cavernBottom,
+        ),
+      };
+
+      carvePassage(
+        terrain,
+        random,
+        anchor,
+        endpoint,
+        passageMinRadius * 0.82,
+        passageMaxRadius * 0.9,
+      );
+
+      if (branch % 2 === 0) {
+        carveBlob(
+          terrain,
+          endpoint.x,
+          endpoint.y,
+          random.float(chamberMinRadius * 0.55, chamberMaxRadius * 0.72),
+          random,
+        );
+      }
+    }
+  }
+}
+
+function localSurfaceWindow(
+  terrain: TerrainGrid,
+  centerX: number,
+  halfWidth: number,
+): readonly number[] | null {
+  const samples: number[] = [];
+
+  for (let x = centerX - halfWidth; x <= centerX + halfWidth; x += 1) {
+    const surface = terrain.surfaceY(x);
+    if (surface === null) {
+      return null;
+    }
+    samples.push(surface);
+  }
+
+  return samples;
+}
+
+function sculptSpawnShelf(
+  terrain: TerrainGrid,
+  centerX: number,
+  padHalfWidth: number,
+): number {
+  const shoulderWidth = Math.max(5, Math.round(padHalfWidth * 0.35));
+  const outerHalfWidth = padHalfWidth + shoulderWidth;
+  const surfaces =
+    localSurfaceWindow(terrain, centerX, outerHalfWidth) ??
+    [Math.round(terrain.height * 0.5)];
+  const targetSurface = clamp(
+    Math.round(average(surfaces)),
+    28,
+    Math.max(28, terrain.height - 28),
+  );
+  const left = clamp(centerX - outerHalfWidth, 1, terrain.width - 2);
+  const right = clamp(centerX + outerHalfWidth, 1, terrain.width - 2);
+
+  for (let x = left; x <= right; x += 1) {
+    const distance = Math.abs(x - centerX);
+    const originalSurface = terrain.surfaceY(x) ?? targetSurface;
+    const shoulderProgress = clamp(
+      (distance - padHalfWidth) / shoulderWidth,
+      0,
+      1,
+    );
+    const columnSurface =
+      distance <= padHalfWidth
+        ? targetSurface
+        : Math.round(
+            targetSurface +
+              (originalSurface - targetSurface) *
+                smoothStep(shoulderProgress),
+          );
+
+    for (let y = 0; y < columnSurface; y += 1) {
+      terrain.set(x, y, Material.Empty);
+    }
+
+    const connectedDepth = Math.max(columnSurface + 16, originalSurface + 2);
+    for (
+      let y = columnSurface;
+      y < Math.min(connectedDepth, terrain.height);
+      y += 1
+    ) {
+      if (terrain.get(x, y) !== Material.Rock) {
+        terrain.set(x, y, Material.Soil);
+      }
+    }
+  }
+
+  return targetSurface;
+}
+
+export function findSpawnSites(
+  terrain: TerrainGrid,
+  options: SpawnSiteOptions = {},
+): readonly SpawnSite[] {
+  const count = options.count ?? 2;
+  const edgeMargin = clamp(
+    Math.round(options.edgeMargin ?? Math.max(96, terrain.width * 0.08)),
+    12,
+    Math.max(12, Math.floor(terrain.width / 3)),
+  );
+  const padHalfWidth = clamp(
+    Math.round(options.padHalfWidth ?? 20),
+    8,
+    Math.max(8, Math.floor(terrain.width / 10)),
+  );
+  const maxSurfaceDelta = clamp(
+    Math.round(options.maxSurfaceDelta ?? 12),
+    2,
+    Math.max(2, Math.floor(terrain.height / 12)),
+  );
+  const tankHalfHeight = clamp(
+    Math.round(options.tankHalfHeight ?? 11),
+    1,
+    Math.max(1, Math.floor(terrain.height / 8)),
+  );
+  const minSeparation = clamp(
+    Math.round(options.minSeparation ?? terrain.width * 0.52),
+    padHalfWidth * 3,
+    Math.max(padHalfWidth * 3, terrain.width - edgeMargin * 2),
+  );
+
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new RangeError("count must be a positive integer.");
+  }
+
+  const candidateForBand = (
+    bandLeft: number,
+    bandRight: number,
+    targetX: number,
+    separatedFrom?: number,
+  ): number | null => {
+    const candidates: { x: number; score: number }[] = [];
+
+    for (let x = Math.ceil(bandLeft); x <= Math.floor(bandRight); x += 4) {
+      if (
+        separatedFrom !== undefined &&
+        Math.abs(x - separatedFrom) < minSeparation
+      ) {
+        continue;
+      }
+
+      const surfaces = localSurfaceWindow(terrain, x, padHalfWidth);
+      if (!surfaces) {
+        continue;
+      }
+
+      const surfaceMin = Math.min(...surfaces);
+      const surfaceMax = Math.max(...surfaces);
+      const surfaceDelta = surfaceMax - surfaceMin;
+
+      if (surfaceDelta > maxSurfaceDelta) {
+        continue;
+      }
+
+      candidates.push({
+        x,
+        score: surfaceDelta * 14 + Math.abs(x - targetX) * 0.04,
+      });
+    }
+
+    candidates.sort(
+      (left, right) => left.score - right.score || left.x - right.x,
+    );
+    return candidates[0]?.x ?? null;
+  };
+
+  const pickedX: number[] = [];
+
+  if (count === 2) {
+    const leftBand = {
+      left: edgeMargin,
+      right: Math.max(edgeMargin, Math.floor(terrain.width * 0.33)),
+      target: terrain.width * 0.2,
+    };
+    const rightBand = {
+      left: Math.min(
+        terrain.width - edgeMargin,
+        Math.ceil(terrain.width * 0.67),
+      ),
+      right: terrain.width - edgeMargin,
+      target: terrain.width * 0.8,
+    };
+    const leftX =
+      candidateForBand(leftBand.left, leftBand.right, leftBand.target) ??
+      clamp(
+        Math.round(leftBand.target),
+        leftBand.left,
+        leftBand.right,
+      );
+    const rightX =
+      candidateForBand(
+        rightBand.left,
+        rightBand.right,
+        rightBand.target,
+        leftX,
+      ) ??
+      clamp(
+        Math.max(Math.round(rightBand.target), leftX + minSeparation),
+        rightBand.left,
+        rightBand.right,
+      );
+
+    pickedX.push(leftX, rightX);
+  } else {
+    for (let index = 0; index < count; index += 1) {
+      const target = ((index + 1) / (count + 1)) * terrain.width;
+      const halfBand = terrain.width / (count + 1) * 0.32;
+      const bandLeft = clamp(target - halfBand, edgeMargin, terrain.width);
+      const bandRight = clamp(
+        target + halfBand,
+        bandLeft,
+        terrain.width - edgeMargin,
+      );
+      const previous = pickedX.at(-1);
+      const candidate =
+        candidateForBand(bandLeft, bandRight, target, previous) ??
+        clamp(Math.round(target), bandLeft, bandRight);
+      pickedX.push(candidate);
+    }
+  }
+
+  return pickedX
+    .sort((left, right) => left - right)
+    .map((x) => {
+      const supportY = sculptSpawnShelf(terrain, x, padHalfWidth);
+      return {
+        x,
+        y: supportY - tankHalfHeight,
+      };
+    });
 }
 
 /**
@@ -207,23 +699,41 @@ export class TerrainGrid {
   }
 
   /**
-   * Returns the first solid cell from the top, or null for an empty/outside
-   * column. Internal caves therefore do not erase the playable surface.
+   * Returns the first solid cell in a column at or below `startY`.
+   *
+   * Unlike `surfaceY`, this can find the floor of a cave or the next ledge
+   * below a destroyed tank. Coordinates above the grid start at row zero;
+   * coordinates below the grid and outside columns have no support.
    */
-  public surfaceY(x: number): number | null {
+  public firstSolidYAtOrBelow(x: number, startY: number): number | null {
     const cellX = Math.floor(x);
+    const firstY = Math.max(0, Math.floor(startY));
 
-    if (cellX < 0 || cellX >= this.width) {
+    if (
+      !Number.isFinite(cellX) ||
+      !Number.isFinite(firstY) ||
+      cellX < 0 ||
+      cellX >= this.width ||
+      firstY >= this.height
+    ) {
       return null;
     }
 
-    for (let y = 0; y < this.height; y += 1) {
+    for (let y = firstY; y < this.height; y += 1) {
       if (this.cells[this.indexOf(cellX, y)] !== Material.Empty) {
         return y;
       }
     }
 
     return null;
+  }
+
+  /**
+   * Returns the first solid cell from the top, or null for an empty/outside
+   * column. Internal caves therefore do not erase the playable surface.
+   */
+  public surfaceY(x: number): number | null {
+    return this.firstSolidYAtOrBelow(x, 0);
   }
 
   public carveCircle(
@@ -411,9 +921,9 @@ export class TerrainGrid {
 }
 
 /**
- * Generates a playable surface plus a small number of buried cavities. The
- * grid remains the source of truth; the interpolated height is only used at
- * generation time.
+ * Generates a large destructible battlefield with steep ridges, internal
+ * cavities and meandering tunnels. The grid remains the source of truth; the
+ * interpolated surface is only used at generation time.
  */
 export function generateTerrain(
   seed: RandomSeed,
@@ -443,10 +953,19 @@ export function generateTerrain(
     height - 1,
   );
   const controlPointSpacing = Math.round(
-    options.controlPointSpacing ?? Math.max(24, width / 10),
+    options.controlPointSpacing ?? Math.max(36, width / 14),
   );
-  const roughness = options.roughness ?? Math.max(8, height * 0.065);
-  const caveCount = options.caveCount ?? (width >= 320 && height >= 180 ? 3 : 0);
+  const roughness = options.roughness ?? Math.max(8, height * 0.095);
+  const caveCount =
+    options.caveCount ??
+    (width >= 320 && height >= 180
+      ? clamp(Math.round(width / 260), 4, 12)
+      : 0);
+  const tunnelCount =
+    options.tunnelCount ??
+    (caveCount === 0
+      ? 0
+      : clamp(Math.round(width / 170), caveCount, 20));
   const bedrockDepth = clamp(
     Math.round(options.bedrockDepth ?? Math.max(4, height * 0.025)),
     1,
@@ -465,15 +984,20 @@ export function generateTerrain(
     throw new RangeError("caveCount must be a non-negative integer.");
   }
 
+  if (!Number.isInteger(tunnelCount) || tunnelCount < 0) {
+    throw new RangeError("tunnelCount must be a non-negative integer.");
+  }
+
   const random = new SeededRandom(seed);
   const terrain = new TerrainGrid(width, height);
   const pointCount = Math.ceil((width - 1) / controlPointSpacing) + 1;
   const controlPoints: number[] = [];
+  const surfaceProfile: number[] = [];
   const middleSurface = (minSurfaceY + maxSurfaceY) / 2;
   let previousHeight = random.float(minSurfaceY, maxSurfaceY + 1);
 
   for (let point = 0; point < pointCount; point += 1) {
-    const pullToMiddle = (middleSurface - previousHeight) * 0.28;
+    const pullToMiddle = (middleSurface - previousHeight) * 0.24;
     const step = random.float(-roughness, roughness);
     previousHeight = clamp(
       previousHeight + pullToMiddle + step,
@@ -483,6 +1007,13 @@ export function generateTerrain(
     controlPoints.push(previousHeight);
   }
 
+  const detailSpacing = Math.max(8, Math.round(controlPointSpacing / 7));
+  const detailPointCount = Math.ceil((width - 1) / detailSpacing) + 2;
+  const detailPoints = Array.from({ length: detailPointCount }, () =>
+    random.float(-1, 1),
+  );
+  const longWavePhase = random.float(0, Math.PI * 2);
+  const ridgePhase = random.float(0, Math.PI * 2);
   const bedrockStart = height - bedrockDepth;
 
   for (let x = 0; x < width; x += 1) {
@@ -499,9 +1030,40 @@ export function generateTerrain(
     const interpolation = smoothStep(segmentPosition);
     const leftHeight = controlPoints[pointIndex] as number;
     const rightHeight = controlPoints[pointIndex + 1] as number;
-    const surface = Math.round(
-      leftHeight + (rightHeight - leftHeight) * interpolation,
+    const macroSurface = leftHeight + (rightHeight - leftHeight) * interpolation;
+
+    const detailIndex = Math.min(
+      Math.floor(x / detailSpacing),
+      detailPoints.length - 2,
     );
+    const detailStart = detailIndex * detailSpacing;
+    const detailPosition = clamp((x - detailStart) / detailSpacing, 0, 1);
+    const detailInterpolation = smoothStep(detailPosition);
+    const leftDetail = detailPoints[detailIndex] as number;
+    const rightDetail = detailPoints[detailIndex + 1] as number;
+    const detailNoise =
+      leftDetail + (rightDetail - leftDetail) * detailInterpolation;
+    const normalizedX = x / Math.max(1, width - 1);
+    const longWave =
+      Math.sin(normalizedX * Math.PI * 3.2 + longWavePhase) *
+      roughness *
+      0.2;
+    const ridgeNoise =
+      Math.sin(normalizedX * Math.PI * 13 + ridgePhase) *
+      Math.sin(normalizedX * Math.PI * 4.4 + longWavePhase) *
+      roughness *
+      0.12;
+    const surface = clamp(
+      Math.round(
+        macroSurface +
+          longWave +
+          detailNoise * roughness * 0.28 +
+          ridgeNoise,
+      ),
+      minSurfaceY,
+      maxSurfaceY,
+    );
+    surfaceProfile.push(surface);
 
     for (let y = surface; y < height; y += 1) {
       terrain.set(
@@ -513,32 +1075,21 @@ export function generateTerrain(
   }
 
   if (width >= 64 && height >= 64) {
-    for (let cave = 0; cave < caveCount; cave += 1) {
-      const radius = random.integer(
-        Math.max(6, Math.floor(Math.min(width, height) * 0.025)),
-        Math.max(7, Math.floor(Math.min(width, height) * 0.055)),
-      );
-      const margin = Math.min(
-        Math.max(radius + 2, 24),
-        Math.floor(width / 2) - 1,
-      );
-      const centerX = random.integer(margin, width - margin);
-      const localSurface = terrain.surfaceY(centerX) ?? minSurfaceY;
-      const minCenterY = Math.min(
-        height - radius - bedrockDepth - 1,
-        localSurface + radius + 18,
-      );
-      const maxCenterY = height - radius - bedrockDepth;
+    carveCaveNetworks(
+      terrain,
+      random,
+      surfaceProfile,
+      caveCount,
+      tunnelCount,
+      bedrockStart,
+    );
+  }
 
-      if (maxCenterY > minCenterY) {
-        const centerY = random.integer(minCenterY, maxCenterY);
-        terrain.carveCircle(centerX, centerY, radius);
-
-        if (random.chance(0.65)) {
-          const offset = Math.max(4, Math.floor(radius * 0.75));
-          terrain.carveCircle(centerX + offset, centerY, radius * 0.8);
-        }
-      }
+  // Generation operations may overlap the bottom edge. Reasserting bedrock
+  // here makes its thickness an invariant rather than a best-effort bound.
+  for (let y = bedrockStart; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      terrain.set(x, y, Material.Rock);
     }
   }
 

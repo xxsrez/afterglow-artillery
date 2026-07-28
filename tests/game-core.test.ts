@@ -63,8 +63,8 @@ describe("seeded game core", () => {
   it("uses the canonical logical world dimensions", () => {
     const terrain = generateTerrain("world-size", { caveCount: 0 });
 
-    expect(WORLD_WIDTH).toBe(960);
-    expect(WORLD_HEIGHT).toBe(540);
+    expect(WORLD_WIDTH).toBe(2_880);
+    expect(WORLD_HEIGHT).toBe(720);
     expect(terrain.width).toBe(WORLD_WIDTH);
     expect(terrain.height).toBe(WORLD_HEIGHT);
     expect(terrain.cells).toBeInstanceOf(Uint8Array);

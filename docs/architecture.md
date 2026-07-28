@@ -102,7 +102,10 @@ voices сохраняют weapon signature и fallback при недоступн
 
 DOM-слой отвечает за меню, магазин, HUD, настройки и доступные touch-targets.
 Canvas отвечает за мир, projectile и эффекты. Координатное преобразование между
-CSS pixels, camera и logical world живёт в одном adapter.
+CSS pixels, camera и logical world живёт в одном adapter. Текущий slice
+разделяет fixed viewport `960×540` и battlefield `2880×720`: terrain и танки
+существуют в полном world-space, а renderer, minimap и pointer gestures
+управляют только камерой.
 
 ## 5. Представление рельефа
 
@@ -115,8 +118,8 @@ CSS pixels, camera и logical world живёт в одном adapter.
 - пустота и тип материала хранятся отдельно от декоративного цвета;
 - collision читает grid как источник истины;
 - операции оружия возвращают ограниченные dirty rectangles;
-- grid и material texture разбиваются на измеряемые chunks; renderer обновляет
-  только затронутые chunks после логической операции, а не каждый кадр;
+- renderer хранит material texture и обновляет только объединённые dirty bounds
+  после логической операции, а не всю сетку и не каждый кадр;
 - стабилизация и жидкие материалы работают как явные ограниченные очереди, а
   не как бесконечная симуляция каждого пикселя;
 - display resolution масштабируется отдельно от logical resolution.
@@ -215,18 +218,21 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
 Текущий vertical slice с полным каталогом из 33 позиций проверяет:
 
 1. seeded PRNG, terrain и trajectory воспроизводятся в unit-тестах;
-2. material grid поддерживает crater, fill, пещеры и bounded settling;
+2. material grid поддерживает crater, fill, пещеры, connected cave mouths,
+   overhangs и bounded settling;
 3. все 33 позиции используют общий каталог и не меняют outcome из VFX;
 4. production worker возвращает корректный HTML и social metadata;
 5. аудиопланы ограничивают общее число procedural/sample layers, а отсутствие
    music/sample asset не нарушает процедурный SFX fallback;
-6. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
-7. performance trace на reference device остаётся обязательным до заявлений о
+6. camera adapter поддерживает drag-pan, minimap, zoom и auto-follow поверх
+   battlefield, который шире viewport;
+7. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
+8. performance trace на reference device остаётся обязательным до заявлений о
    производительности на физическом устройстве.
 
-Первые пять пунктов проверяются автоматикой и browser smoke. Последние два
-нельзя считать подтверждёнными без реального устройства, прослушивания и
-trace.
+Пункты 1–5 проверяются автоматикой, а пункт 6 — также browser smoke.
+Последние два нельзя считать подтверждёнными без реального устройства,
+прослушивания и trace.
 
 ## 11. Риски
 

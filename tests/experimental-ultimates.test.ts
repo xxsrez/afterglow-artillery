@@ -32,6 +32,28 @@ function makeTerrain(): TerrainGrid {
   return terrain;
 }
 
+function makeCaveTerrain(): TerrainGrid {
+  const terrain = new TerrainGrid(300, 220);
+
+  for (let y = 50; y < terrain.height; y += 1) {
+    for (let x = 0; x < terrain.width; x += 1) {
+      terrain.set(
+        x,
+        y,
+        y >= 210 ? Material.Rock : Material.Soil,
+      );
+    }
+  }
+
+  for (let y = 95; y < 160; y += 1) {
+    for (let x = 35; x <= 265; x += 1) {
+      terrain.set(x, y, Material.Empty);
+    }
+  }
+
+  return terrain;
+}
+
 function resolve(
   ultimateId: ExperimentalUltimateId,
 ): ExperimentalResolutionResult {
@@ -243,6 +265,71 @@ describe("Experimental Ultimates registry", () => {
       expect(ultimate.aftermathMs).toBeLessThanOrEqual(4_000);
       expect(ultimate.resolutionMs).toBeLessThanOrEqual(5_000);
     }
+  });
+});
+
+describe("Experimental cave support", () => {
+  it("keeps a horizontally displaced cave tank on support below its depth", () => {
+    const result = resolveExperimentalUltimate({
+      ultimateId: "gravityCathedral",
+      seed: "cave-displacement",
+      origin: { x: 20, y: 40 },
+      impact: { x: 150, y: 80 },
+      direction: 1,
+      terrain: makeCaveTerrain(),
+      tanks: [
+        {
+          id: "cave",
+          x: 70,
+          y: 149,
+          health: 100,
+          maxHealth: 100,
+        },
+      ],
+    });
+    const tank = result.tanks[0];
+
+    expect(tank?.health).toBeGreaterThan(0);
+    expect(tank?.y).toBeGreaterThan(100);
+    expect(
+      result.terrain.firstSolidYAtOrBelow(
+        tank?.x ?? 0,
+        (tank?.y ?? 0) + 11,
+      ),
+    ).toBe((tank?.y ?? 0) + 11);
+  });
+
+  it("destroys a displaced tank when no support exists below it", () => {
+    const terrain = new TerrainGrid(300, 220);
+    const result = resolveExperimentalUltimate({
+      ultimateId: "gravityCathedral",
+      seed: "unsupported-displacement",
+      origin: { x: 20, y: 40 },
+      impact: { x: 150, y: 20 },
+      direction: 1,
+      terrain,
+      tanks: [
+        {
+          id: "unsupported",
+          x: 30,
+          y: 170,
+          health: 100,
+          maxHealth: 100,
+        },
+      ],
+    });
+    const tank = result.tanks[0];
+
+    expect(tank?.health).toBe(0);
+    expect(tank?.y).toBeGreaterThan(terrain.height);
+    expect(
+      result.eventLog.some(
+        (event) =>
+          event.type === "tank-damaged" &&
+          event.tankId === "unsupported" &&
+          event.remainingHealth === 0,
+      ),
+    ).toBe(true);
   });
 });
 
