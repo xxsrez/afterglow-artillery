@@ -48,6 +48,7 @@ export interface AudioActivationReport {
 export type AudioOutputRoute =
   | "audio-session"
   | "media-element-fallback"
+  | "safari-media-stream"
   | "webaudio";
 
 export type AudioMediaBridgeState =
@@ -134,6 +135,7 @@ export interface AudioDirectorOptions {
   readonly assetLoader?: AudioAssetLoader | null;
   readonly audioSession?: AudioSessionLike | null;
   readonly mediaBridge?: AudioMediaBridge | null;
+  readonly outputNode?: AudioNode | null;
   readonly outputRoute?: AudioOutputRoute;
 }
 
@@ -184,6 +186,53 @@ class HtmlMediaAudioBridge implements AudioMediaBridge {
   }
 }
 
+interface AudioOutputBridge extends AudioMediaBridge {
+  readonly outputNode: AudioNode;
+}
+
+class HtmlMediaStreamAudioBridge implements AudioOutputBridge {
+  private bridgeState: AudioMediaBridgeState = "idle";
+
+  public constructor(
+    private readonly element: HTMLAudioElement,
+    public readonly outputNode: MediaStreamAudioDestinationNode,
+  ) {}
+
+  public get state(): AudioMediaBridgeState {
+    return this.bridgeState;
+  }
+
+  public async start(): Promise<void> {
+    if (!this.element.paused && !this.element.ended) {
+      this.bridgeState = "playing";
+      return;
+    }
+    this.bridgeState = "starting";
+    try {
+      await this.element.play();
+      if (this.element.paused) {
+        throw new Error("Safari media-stream output remained paused.");
+      }
+      this.bridgeState = "playing";
+    } catch (error) {
+      this.bridgeState = "blocked";
+      throw error;
+    }
+  }
+
+  public pause(): void {
+    this.element.pause();
+    this.bridgeState = "idle";
+  }
+
+  public dispose(): void {
+    this.pause();
+    this.element.srcObject = null;
+    this.element.removeAttribute("src");
+    this.element.remove();
+  }
+}
+
 export function isAppleMobileWebKit(
   navigatorLike: NavigatorWithAudioSession | null,
 ): boolean {
@@ -196,6 +245,43 @@ export function isAppleMobileWebKit(
     navigatorLike.platform === "MacIntel" &&
     (navigatorLike.maxTouchPoints ?? 0) > 1;
   return nativeIos || touchIpad;
+}
+
+export function isDesktopSafariWebKit(
+  navigatorLike: NavigatorWithAudioSession | null,
+): boolean {
+  if (!navigatorLike || isAppleMobileWebKit(navigatorLike)) {
+    return false;
+  }
+  const userAgent = navigatorLike.userAgent ?? "";
+  const macPlatform =
+    navigatorLike.platform === "MacIntel" ||
+    /\bMacintosh\b/i.test(userAgent);
+  const safariEngine =
+    /\bVersion\/[\d.]+.*\bSafari\/[\d.]+/i.test(userAgent);
+  const alternateBrowser =
+    /\b(?:Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|Firefox|FxiOS)\//i.test(
+      userAgent,
+    );
+  return macPlatform && safariEngine && !alternateBrowser;
+}
+
+export function configureAutomaticAudioSession(
+  navigatorLike: NavigatorWithAudioSession | null,
+): string | null {
+  if (!isDesktopSafariWebKit(navigatorLike)) {
+    return null;
+  }
+  const session = navigatorLike?.audioSession;
+  if (!session) {
+    return null;
+  }
+  try {
+    session.type = "auto";
+    return session.type === "auto" ? session.type : null;
+  } catch {
+    return null;
+  }
 }
 
 function createMediaAudioBridge(): AudioMediaBridge | null {
@@ -216,6 +302,33 @@ function createMediaAudioBridge(): AudioMediaBridge | null {
   element.style.display = "none";
   document.body.appendChild(element);
   return new HtmlMediaAudioBridge(element);
+}
+
+function createDesktopSafariOutputBridge(
+  context: AudioContext,
+  navigatorLike: NavigatorWithAudioSession | null,
+): AudioOutputBridge | null {
+  if (
+    typeof document === "undefined" ||
+    !isDesktopSafariWebKit(navigatorLike) ||
+    typeof context.createMediaStreamDestination !== "function"
+  ) {
+    return null;
+  }
+  try {
+    const outputNode = context.createMediaStreamDestination();
+    const element = document.createElement("audio");
+    element.srcObject = outputNode.stream;
+    element.preload = "auto";
+    element.volume = 1;
+    element.setAttribute("playsinline", "");
+    element.setAttribute("aria-hidden", "true");
+    element.style.display = "none";
+    document.body.appendChild(element);
+    return new HtmlMediaStreamAudioBridge(element, outputNode);
+  } catch {
+    return null;
+  }
 }
 
 export function configurePlaybackAudioSession(
@@ -1692,7 +1805,7 @@ export class AudioDirector {
     });
     this.sfxGain.connect(this.master);
     this.master.connect(this.compressor);
-    this.compressor.connect(context.destination);
+    this.compressor.connect(options.outputNode ?? context.destination);
     this.context.addEventListener?.(
       "statechange",
       this.handleContextStateChange,
@@ -1791,7 +1904,7 @@ export class AudioDirector {
       ? configurePlaybackAudioSession({
           audioSession: this.audioSession,
         })
-      : configurePlaybackAudioSession();
+      : null;
 
     if (
       this.activated &&
@@ -2511,10 +2624,16 @@ export function createAudioDirector(
     typeof navigator === "undefined"
       ? null
       : (navigator as NavigatorWithAudioSession);
-  const audioSession = navigatorWithAudioSession?.audioSession ?? null;
-  const playbackSessionType = configurePlaybackAudioSession(
-    navigatorWithAudioSession,
-  );
+  const appleMobile = isAppleMobileWebKit(navigatorWithAudioSession);
+  const audioSession = appleMobile
+    ? navigatorWithAudioSession?.audioSession ?? null
+    : null;
+  const playbackSessionType = audioSession
+    ? configurePlaybackAudioSession({ audioSession })
+    : null;
+  if (!appleMobile) {
+    configureAutomaticAudioSession(navigatorWithAudioSession);
+  }
   const AudioContextConstructor =
     window.AudioContext ??
     (
@@ -2525,21 +2644,30 @@ export function createAudioDirector(
   if (!AudioContextConstructor) {
     return null;
   }
+  const context = new AudioContextConstructor();
+  const safariOutputBridge = createDesktopSafariOutputBridge(
+    context,
+    navigatorWithAudioSession,
+  );
   const mediaBridge =
-    playbackSessionType === "playback" ? null : createMediaAudioBridge();
+    safariOutputBridge ??
+    (playbackSessionType === "playback" ? null : createMediaAudioBridge());
   const outputRoute: AudioOutputRoute =
-    playbackSessionType === "playback"
+    safariOutputBridge
+      ? "safari-media-stream"
+      : playbackSessionType === "playback"
       ? "audio-session"
       : mediaBridge
         ? "media-element-fallback"
         : "webaudio";
   return new AudioDirector(
-    new AudioContextConstructor(),
+    context,
     onContextStateChange,
     {
       assetLoader: createHttpAudioAssetLoader(),
       audioSession,
       mediaBridge,
+      outputNode: safariOutputBridge?.outputNode,
       outputRoute,
     },
   );

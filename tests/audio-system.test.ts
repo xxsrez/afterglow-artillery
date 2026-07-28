@@ -23,9 +23,11 @@ import {
   EXPERIMENTAL_SOUND_PROFILES,
   SOUND_PROFILES,
   audioPlanForEvent,
+  configureAutomaticAudioSession,
   configurePlaybackAudioSession,
   damageBucket,
   isAppleMobileWebKit,
+  isDesktopSafariWebKit,
   loadAudioPreferences,
   normalizeAudioPreferences,
   saveAudioPreferences,
@@ -739,7 +741,7 @@ class FakeMediaBridge implements AudioMediaBridge {
 }
 
 describe("AudioDirector lifecycle and budgets", () => {
-  it("requests the playback audio session when Safari exposes AudioSession", () => {
+  it("requests playback only for the selected Apple mobile audio session", () => {
     const audioSession = { type: "auto", state: "inactive" };
     expect(
       configurePlaybackAudioSession({ audioSession }),
@@ -748,7 +750,7 @@ describe("AudioDirector lifecycle and budgets", () => {
     expect(configurePlaybackAudioSession({})).toBeNull();
   });
 
-  it("detects native iPhone/iPad WebKit for the media-route fallback", () => {
+  it("separates iPhone/iPad WebKit from desktop Safari and Mac Chrome", () => {
     expect(
       isAppleMobileWebKit({
         userAgent:
@@ -767,6 +769,48 @@ describe("AudioDirector lifecycle and budgets", () => {
           "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/140",
       }),
     ).toBe(false);
+
+    const desktopSafari = {
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5.2 Safari/605.1.15",
+      platform: "MacIntel",
+      maxTouchPoints: 0,
+    };
+    expect(isDesktopSafariWebKit(desktopSafari)).toBe(true);
+    expect(
+      isDesktopSafariWebKit({
+        ...desktopSafari,
+        userAgent:
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36",
+      }),
+    ).toBe(false);
+    expect(
+      isDesktopSafariWebKit({
+        ...desktopSafari,
+        maxTouchPoints: 5,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns desktop Safari to automatic audio-session routing", () => {
+    const audioSession = { type: "playback", state: "inactive" };
+    const desktopSafari = {
+      audioSession,
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5.2 Safari/605.1.15",
+      platform: "MacIntel",
+      maxTouchPoints: 0,
+    };
+
+    expect(configureAutomaticAudioSession(desktopSafari)).toBe("auto");
+    expect(audioSession.type).toBe("auto");
+    expect(
+      configureAutomaticAudioSession({
+        ...desktopSafari,
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/140",
+      }),
+    ).toBeNull();
   });
 
   it("starts the unlock source and media route before awaiting resume", async () => {

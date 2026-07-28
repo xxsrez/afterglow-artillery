@@ -178,9 +178,12 @@ ammo policy.
   CC0 action-chiptune и смешивает CC0 one-shot layers с procedural Web Audio
   signatures; все `33 + 10` items имеют typed profile, semantic archetype и
   impact scale;
-  Safari получает поддерживаемую playback AudioSession, Apple mobile WebKit
-  без этого API — media-route fallback, а `resume()` считается успешным только
-  после bounded timeout, подтверждённого состояния `running` и движения clock;
+  Apple mobile WebKit получает playback AudioSession, а без этого API —
+  media-route fallback; desktop Safari сохраняет автоматическую AudioSession и
+  получает отдельный `MediaStreamAudioDestinationNode → HTMLAudioElement`
+  output, потому что `running` Web Audio context в Safari не всегда означает
+  физически слышимый destination; `resume()` считается успешным только после
+  bounded timeout, подтверждённого состояния `running` и движения clock;
 - симуляция не зависит от частиц, звука, частоты кадров и camera shake.
 
 Player-owned combat state хранится на стабильном объекте tank: выбранное
@@ -226,9 +229,9 @@ Music и sample buffers начинают загружаться асинхрон
 audio unlock и не входят в iOS activation timeout. Future impact ждёт уже
 идущий decode до своего deadline; pause/background сохраняют оставшуюся
 задержку ещё не начавшихся timeline layers и создают новые sources после
-resume. Эти механизмы не меняют симуляцию. Существующие AudioSession
-`playback`, hidden media-route bridge, `suspended`/`interrupted` recovery и
-новый прямой Retry gesture сохранены.
+resume. Эти механизмы не меняют симуляцию. Apple mobile AudioSession
+`playback`, iOS hidden media-route bridge, desktop Safari media-stream output,
+`suspended`/`interrupted` recovery и новый прямой Retry gesture сохранены.
 Источники, лицензии, локальные преобразования и контрольные суммы перечислены в
 [справочнике аудиоассетов](reference/audio-assets.md).
 

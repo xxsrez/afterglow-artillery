@@ -161,10 +161,13 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - При скрытии вкладки бой ставится на контролируемую паузу: браузеры обычно
   приостанавливают `requestAnimationFrame` в background.
 - Возврат не «догоняет» минуты симуляции одним кадром.
-- AudioContext активируется после явного tap/click; Safari playback-session,
-  синхронный confirmation source, `suspended`/`interrupted`, bounded timeout и
-  обязательная проверка `running` входят в unlock. Apple mobile WebKit без
-  AudioSession API получает HTMLMediaElement media-route fallback. Mute,
+- AudioContext активируется после явного tap/click; Apple mobile
+  playback-session, синхронный confirmation source, `suspended`/`interrupted`,
+  bounded timeout и обязательная проверка `running` входят в unlock. Desktop
+  Safari сохраняет автоматический AudioSession и выводит Web Audio graph через
+  MediaStreamAudioDestinationNode и HTMLMediaElement, потому что `running`
+  context в WebKit может оставаться физически беззвучным. Apple mobile WebKit
+  без AudioSession API получает HTMLMediaElement media-route fallback. Mute,
   restart и unmount отменяют pending sources; pause/background сохраняют
   оставшееся время будущих timeline layers и создают новые nodes после
   восстановления. Score возобновляется из нового прямого gesture либо UI

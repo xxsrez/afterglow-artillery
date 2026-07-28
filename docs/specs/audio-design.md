@@ -128,11 +128,16 @@ voices; при переполнении низкоприоритетный sourc
 выключенных bus. `AudioContext` не создаётся до пользовательского действия.
 Если Web Audio недоступен, UI показывает retry, а матч продолжает работать.
 
-На Safari, где доступен AudioSession API, приложение до создания context
-запрашивает session type `playback`: игра содержит непрерывную музыку, а не
-только системные notification cues. Unlock начинается непосредственно внутри
-Start/Retry gesture: playback session настраивается, короткий ненулевой
-confirmation tone планируется и `resume()` вызывается до первого `await`.
+На iPhone/iPad WebKit, где доступен AudioSession API, приложение до создания
+context запрашивает session type `playback`: игра содержит непрерывную музыку,
+а не только системные notification cues. Desktop Safari сохраняет
+`AudioSession.type = auto` и выводит общий Web Audio mix через
+`MediaStreamAudioDestinationNode → HTMLAudioElement`. Эта ветка обходит
+известное состояние WebKit, в котором `AudioContext` остаётся `running`, его
+clock и callbacks движутся, но прямой destination физически молчит. Unlock
+начинается непосредственно внутри Start/Retry gesture: выбранный media route
+запускается, короткий ненулевой confirmation tone планируется и `resume()`
+вызывается до первого `await`.
 Вводится bounded timeout, поэтому зависший WebKit promise переходит в Retry, а
 не оставляет UI навсегда в промежуточном состоянии. Unlock
 считается успешным только при фактическом `AudioContext.state === "running"` и
@@ -185,8 +190,9 @@ voices и значения music/SFX/category gains без пользовате�
   clock остался заморожен;
 - timeout зависшего `resume()`, единственную точку применения volume и порядок
   `confirmation source.start() → media bridge → resume()`;
-- выбор AudioSession `playback` при наличии API и Apple mobile fallback при его
-  отсутствии;
+- выбор AudioSession `playback` только для Apple mobile, возврат desktop Safari
+  к `auto` и отдельный Safari media-stream output; Apple mobile fallback при
+  отсутствии API;
 - отдельный высокочастотный sound-check cue.
 
 Browser smoke проверяет наличие controls, сохранение настроек, запуск после
