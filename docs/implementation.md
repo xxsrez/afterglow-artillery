@@ -174,8 +174,10 @@ ammo policy.
   projectile не проходил сквозь тонкий слой земли;
 - React отвечает за HUD и controls, Canvas 2D — за поле, танки, projectiles и
   эффекты;
-- отдельный audio module синтезирует музыку и event-driven SFX через Web Audio
-  после пользовательского действия; все `33 + 10` items имеют typed profile;
+- отдельный audio module после пользовательского действия проигрывает локальный
+  CC0 action-chiptune и смешивает CC0 one-shot layers с procedural Web Audio
+  signatures; все `33 + 10` items имеют typed profile, semantic archetype и
+  impact scale;
   Safari получает поддерживаемую playback AudioSession, Apple mobile WebKit
   без этого API — media-route fallback, а `resume()` считается успешным только
   после bounded timeout, подтверждённого состояния `running` и движения clock;
@@ -194,12 +196,41 @@ round, wind и мир остаются общими настройками ма�
 WebKit `interrupted` не скрываются за включёнными controls: экран показывает
 диагностируемый recovery state и даёт новый прямой Retry tap. На стартовом
 экране отдельный sound-check даёт высокий слышимый cue; SFX volume применяется
-один раз на bus, а score перенесён в воспроизводимый телефоном диапазон.
+один раз на bus.
 Выбранный `DemoMatchMode` также является общей явной настройкой матча.
 
 Чистые системы находятся в `lib/game/`, presentation — в `app/game/`. Их
 граница и выбор renderer зафиксированы в
 [ADR 0002](decisions/0002-vertical-slice-architecture.md).
+
+## Музыка и SFX
+
+Музыка Quick Demo — локально поставляемый action-chiptune loop Juhani Junkala
+из CC0-набора `5 Chiptunes (Action)`. Файл нормализован и перекодирован для
+игрового микса, загружается через `fetch`, декодируется в `AudioBuffer` и
+проигрывается одним зацикленным `AudioBufferSourceNode` через
+`musicGain → duckGain → masterGain → compressor`. Текущая версия содержит
+один loop: шесть фаз матча пока не имеют отдельных аранжировок; его
+воспроизведением и уровнем управляют lifecycle, pause, настройки bus и ducking.
+
+CC0 one-shots Kenney дают отдельные слои для малого, среднего, большого и
+ultimate blast, низкочастотного основания, soil/rock/hull impact, shield,
+laser, fire и thruster. План использует механический archetype и scale оружия,
+поэтому крупный взрыв отличается от малого не только громкостью, но числом
+слоёв, спектром и хвостом; large/ultimate дополнительно получают
+среднечастотный crunch, слышимый там, где телефонный динамик ослабляет sub.
+Процедурные motifs остаются signatures и fallback: ошибка загрузки музыки не
+выключает SFX, а недоступный sample не отменяет остальные слои event.
+
+Music и sample buffers начинают загружаться асинхронно только после успешного
+audio unlock и не входят в iOS activation timeout. Future impact ждёт уже
+идущий decode до своего deadline; pause/background сохраняют оставшуюся
+задержку ещё не начавшихся timeline layers и создают новые sources после
+resume. Эти механизмы не меняют симуляцию. Существующие AudioSession
+`playback`, hidden media-route bridge, `suspended`/`interrupted` recovery и
+новый прямой Retry gesture сохранены.
+Источники, лицензии, локальные преобразования и контрольные суммы перечислены в
+[справочнике аудиоассетов](reference/audio-assets.md).
 
 ## Управление и адаптация
 
@@ -247,3 +278,6 @@ server-rendered HTML. После этого основной поток долж
 - производительность на физическом среднем Android-устройстве пока не
   измерена: device trace и physical touch pass не выполнялись, поэтому
   совместимость формулируется как целевая, а не подтверждённая.
+- качество нового микса на физическом iPhone, встроенном mono-динамике,
+  headphones и при системном Silent Mode требует отдельного listening pass:
+  успешный decode и `AudioContext.state === "running"` этого не доказывают.

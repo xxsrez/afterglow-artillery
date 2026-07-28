@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   EXPERIMENTAL_ULTIMATES,
@@ -7,13 +7,20 @@ import {
   type ShieldEvent,
 } from "../lib/game";
 import {
+  AUDIO_SAMPLE_IDS,
+  AUDIO_SAMPLE_URLS,
+  MUSIC_TRACK,
+  createHttpAudioAssetLoader,
+  type AudioAssetLoader,
+  type AudioSampleId,
+} from "../app/game/audio-assets";
+import {
   AUDIO_PREFERENCES_STORAGE_KEY,
   AudioActivationError,
   AudioDirector,
   CANONICAL_SOUND_PROFILES,
   DEFAULT_AUDIO_PREFERENCES,
   EXPERIMENTAL_SOUND_PROFILES,
-  MUSIC_TEMPO_BPM,
   SOUND_PROFILES,
   audioPlanForEvent,
   configurePlaybackAudioSession,
@@ -108,13 +115,18 @@ describe("typed weapon sound profiles", () => {
 });
 
 describe("pure audio event planning", () => {
-  it("keeps every procedural score state inside the 72–84 BPM brief", () => {
-    expect(Object.keys(MUSIC_TEMPO_BPM)).toHaveLength(6);
-    expect(Math.min(...Object.values(MUSIC_TEMPO_BPM))).toBe(72);
-    expect(Math.max(...Object.values(MUSIC_TEMPO_BPM))).toBe(84);
+  it("maps physical effect scale instead of weapon-id variation", () => {
+    expect(SOUND_PROFILES.babyMissile.impactScale).toBe("small");
+    expect(SOUND_PROFILES.missile.impactScale).toBe("medium");
+    expect(SOUND_PROFILES.babyNuke.impactScale).toBe("large");
+    expect(SOUND_PROFILES.nuke.impactScale).toBe("ultimate");
+    expect(SOUND_PROFILES.heliosSpire.archetype).toBe("laser");
+    expect(SOUND_PROFILES.magmaForge.archetype).toBe("fire");
+    expect(SOUND_PROFILES.faultChoir.archetype).toBe("terrain-cut");
+    expect(MUSIC_TRACK.durationSeconds).toBeGreaterThan(70);
   });
 
-  it("uses actual impact timestamps and caps one gameplay event at 12 voices", () => {
+  it("uses actual impact timestamps and caps one gameplay event at 12 total layers", () => {
     const impactTimesMs = Array.from(
       { length: 30 },
       (_, index) => 300 + index * 37,
@@ -126,16 +138,21 @@ describe("pure audio event planning", () => {
       }),
       enabled,
     );
-    const impacts = plan.voices.filter((voice) =>
-      voice.id.includes(":impact:"),
-    );
+    const impactLayers = [
+      ...plan.voices.filter((voice) => voice.id.includes(":impact:")),
+      ...plan.samples.filter((planned) =>
+        planned.id.includes(":impact-sample:"),
+      ),
+    ];
 
-    expect(plan.voices.length).toBeLessThanOrEqual(12);
-    expect(impacts.length).toBeGreaterThan(1);
-    expect(impacts[0]?.atMs).toBe(impactTimesMs[0]);
-    expect(impacts.every((voice) => impactTimesMs.includes(voice.atMs))).toBe(
+    expect(plan.voices.length + plan.samples.length).toBeLessThanOrEqual(12);
+    expect(impactLayers.length).toBeGreaterThan(1);
+    expect(impactLayers.some(({ atMs }) => atMs === impactTimesMs[0])).toBe(
       true,
     );
+    expect(
+      impactLayers.every((planned) => impactTimesMs.includes(planned.atMs)),
+    ).toBe(true);
   });
 
   it("plans fizzle without child-impact audio", () => {
@@ -153,6 +170,9 @@ describe("pure audio event planning", () => {
     expect(plan.voices.some((voice) => voice.id.includes(":impact:"))).toBe(
       false,
     );
+    expect(
+      plan.samples.some((planned) => planned.id.includes(":impact-sample:")),
+    ).toBe(false);
   });
 
   it("maps all shield event variants and all five shield families", () => {
@@ -200,6 +220,11 @@ describe("pure audio event planning", () => {
     expect(new Set(shieldVoices.map((voice) => voice.id.split(":")[2]))).toEqual(
       new Set(["absorb", "break", "deflect", "bypass", "laser-immunity"]),
     );
+    expect(
+      variantPlan.samples.filter(
+        (planned) => planned.sampleId === "shield-field",
+      ),
+    ).toHaveLength(5);
 
     const familyFingerprints = SHIELDS.slice(1).map((shield) => {
       const event: ShieldEvent = {
@@ -267,22 +292,19 @@ describe("pure audio event planning", () => {
         (voice) => voice.id === "hull:critical-crossing:0",
       ),
     ).toBe(true);
+    expect(plan.samples.map(({ sampleId }) => sampleId)).toEqual(
+      expect.arrayContaining(["impact-hull", "impact-rock"]),
+    );
   });
 
-  it("keeps music and SFX switches independent", () => {
+  it("keeps SFX planning independent from the music switch", () => {
     const musicOff = { ...enabled, musicEnabled: false };
     const sfxOff = { ...enabled, sfxEnabled: false };
-    expect(
-      audioPlanForEvent({ type: "music", state: "aiming" }, musicOff).voices,
-    ).toHaveLength(0);
     expect(audioPlanForEvent(timeline(), musicOff).voices.length).toBeGreaterThan(
       0,
     );
     expect(audioPlanForEvent(timeline(), sfxOff).voices).toHaveLength(0);
-    expect(
-      audioPlanForEvent({ type: "music", state: "aiming" }, sfxOff).voices
-        .length,
-    ).toBeGreaterThan(0);
+    expect(audioPlanForEvent(timeline(), sfxOff).samples).toHaveLength(0);
   });
 
   it("keeps plan gains independent from the runtime volume bus", () => {
@@ -298,20 +320,115 @@ describe("pure audio event planning", () => {
     expect(quiet.voices.map(({ gain }) => gain)).toEqual(
       loud.voices.map(({ gain }) => gain),
     );
+    expect(quiet.samples.map(({ gain }) => gain)).toEqual(
+      loud.samples.map(({ gain }) => gain),
+    );
   });
 
-  it("keeps the procedural score inside a phone-audible spectrum", () => {
-    const plan = audioPlanForEvent(
-      { type: "music", state: "round-result" },
+  it("makes large blasts materially deeper and denser than small blasts", () => {
+    const small = audioPlanForEvent(
+      timeline({ weaponId: "babyMissile" }),
       enabled,
     );
-    expect(Math.min(...plan.voices.map(({ frequencyHz }) => frequencyHz))).toBe(
-      196,
+    const ultimate = audioPlanForEvent(
+      timeline({ weaponId: "nuke" }),
+      enabled,
     );
-    expect(Math.max(...plan.voices.map(({ frequencyHz }) => frequencyHz))).toBe(
-      587.33,
+    const smallImpact = small.samples.find((planned) =>
+      planned.id.includes(":impact-sample:"),
     );
-    expect(Math.max(...plan.voices.map(({ gain }) => gain))).toBe(0.04);
+    const ultimateImpact = ultimate.samples.find((planned) =>
+      planned.id.includes(":impact-sample:"),
+    );
+
+    expect(smallImpact?.sampleId).toBe("blast-small");
+    expect(ultimateImpact?.sampleId).toBe("blast-large");
+    expect(ultimateImpact?.gain ?? 0).toBeGreaterThan(smallImpact?.gain ?? 0);
+    expect(
+      ultimate.samples.some(
+        (planned) => planned.sampleId === "blast-low",
+      ),
+    ).toBe(true);
+    expect(
+      ultimate.samples.some(
+        (planned) => planned.sampleId === "blast-medium",
+      ),
+    ).toBe(true);
+    expect(
+      small.samples.some((planned) => planned.sampleId === "blast-low"),
+    ).toBe(false);
+  });
+
+  it("gives fire, laser, terrain and mechanical weapons distinct samples", () => {
+    const plannedSamples = (
+      weaponId: Extract<
+        GameAudioEvent,
+        { type: "weapon-timeline" }
+      >["weaponId"],
+    ) =>
+      audioPlanForEvent(timeline({ weaponId }), enabled).samples.map(
+        ({ sampleId }) => sampleId,
+      );
+
+    expect(plannedSamples("hotNapalm")).toContain("fire-whoosh");
+    expect(plannedSamples("laser")).toContain("laser-large");
+    expect(plannedSamples("heavyDigger")).toContain("impact-rock");
+    expect(plannedSamples("tonOfDirt")).toContain("impact-soil");
+    expect(plannedSamples("heavyRoller")).toContain("impact-hull");
+  });
+});
+
+describe("audio asset delivery adapter", () => {
+  it("fetches versioned same-origin URLs and decodes music and samples", async () => {
+    const decoded = { duration: 1 } as AudioBuffer;
+    const decodeAudioData = vi.fn(async () => decoded);
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        void input;
+        void init;
+        return new Response(new Uint8Array([82, 73, 70, 70]), {
+          status: 200,
+        });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const loader = createHttpAudioAssetLoader();
+      const context = { decodeAudioData } as unknown as AudioContext;
+
+      await expect(loader.loadMusic(context)).resolves.toBe(decoded);
+      await expect(loader.loadSample(context, "blast-large")).resolves.toBe(
+        decoded,
+      );
+
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        MUSIC_TRACK.url,
+        AUDIO_SAMPLE_URLS["blast-large"],
+      ]);
+      expect(
+        fetchMock.mock.calls.every(([, init]) => init?.credentials === "same-origin"),
+      ).toBe(true);
+      expect(decodeAudioData).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects an HTTP error before attempting to decode", async () => {
+    const decodeAudioData = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    try {
+      const loader = createHttpAudioAssetLoader();
+      await expect(
+        loader.loadMusic({ decodeAudioData } as unknown as AudioContext),
+      ).rejects.toThrow("returned HTTP 404");
+      expect(decodeAudioData).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -390,9 +507,23 @@ class FakeOscillator extends FakeNode {
 
 class FakeBufferSource extends FakeNode {
   public buffer: AudioBuffer | null = null;
+  public loop = false;
+  public readonly playbackRate = new FakeAudioParam();
   public onended: (() => void) | null = null;
+  public started = false;
+  public stopped = false;
+
+  public constructor(private readonly events: string[] = []) {
+    super();
+  }
 
   public start(): void {
+    this.started = true;
+    this.events.push(this.loop ? "music-start" : "sample-start");
+  }
+
+  public stop(): void {
+    this.stopped = true;
     this.onended?.();
   }
 }
@@ -420,6 +551,7 @@ class FakeAudioContext {
   private stateChangeListener: (() => void) | null = null;
   private runningSince = 0;
   public readonly events: string[] = [];
+  public readonly bufferSources: FakeBufferSource[] = [];
 
   public constructor(
     state: RuntimeAudioContextState = "suspended",
@@ -455,7 +587,9 @@ class FakeAudioContext {
     return new FakePanner() as unknown as StereoPannerNode;
   }
   public createBufferSource(): AudioBufferSourceNode {
-    return new FakeBufferSource() as unknown as AudioBufferSourceNode;
+    const source = new FakeBufferSource(this.events);
+    this.bufferSources.push(source);
+    return source as unknown as AudioBufferSourceNode;
   }
   public createBuffer(): AudioBuffer {
     return {} as AudioBuffer;
@@ -497,6 +631,89 @@ class FakeAudioContext {
   public async close(): Promise<void> {
     this.state = "closed";
     this.stateChangeListener?.();
+  }
+}
+
+class FakeAudioAssetLoader implements AudioAssetLoader {
+  public readonly loadedSamples: AudioSampleId[] = [];
+  public musicLoads = 0;
+
+  public constructor(
+    private readonly musicOutcome: "ready" | "reject" | "pending" = "ready",
+    private readonly sampleOutcome: "ready" | "reject" = "ready",
+  ) {}
+
+  public loadMusic(): Promise<AudioBuffer> {
+    this.musicLoads += 1;
+    if (this.musicOutcome === "reject") {
+      return Promise.reject(new Error("music decode failed"));
+    }
+    if (this.musicOutcome === "pending") {
+      return new Promise<AudioBuffer>(() => undefined);
+    }
+    return Promise.resolve({ duration: MUSIC_TRACK.durationSeconds } as AudioBuffer);
+  }
+
+  public loadSample(
+    _context: AudioContext,
+    sampleId: AudioSampleId,
+  ): Promise<AudioBuffer> {
+    this.loadedSamples.push(sampleId);
+    if (this.sampleOutcome === "reject") {
+      return Promise.reject(new Error(`${sampleId} decode failed`));
+    }
+    return Promise.resolve({ duration: 0.4 } as AudioBuffer);
+  }
+}
+
+class DeferredMusicAssetLoader implements AudioAssetLoader {
+  private readonly music: Promise<AudioBuffer>;
+  private resolveMusicPromise: (buffer: AudioBuffer) => void = () => undefined;
+
+  public constructor() {
+    this.music = new Promise<AudioBuffer>((resolve) => {
+      this.resolveMusicPromise = resolve;
+    });
+  }
+
+  public loadMusic(): Promise<AudioBuffer> {
+    return this.music;
+  }
+
+  public loadSample(): Promise<AudioBuffer> {
+    return Promise.resolve({ duration: 0.4 } as AudioBuffer);
+  }
+
+  public resolveMusic(): void {
+    this.resolveMusicPromise({
+      duration: MUSIC_TRACK.durationSeconds,
+    } as AudioBuffer);
+  }
+}
+
+class DeferredSamplesAssetLoader implements AudioAssetLoader {
+  private readonly samples: Promise<AudioBuffer>;
+  private resolveSamplesPromise: (buffer: AudioBuffer) => void =
+    () => undefined;
+
+  public constructor() {
+    this.samples = new Promise<AudioBuffer>((resolve) => {
+      this.resolveSamplesPromise = resolve;
+    });
+  }
+
+  public loadMusic(): Promise<AudioBuffer> {
+    return Promise.resolve({
+      duration: MUSIC_TRACK.durationSeconds,
+    } as AudioBuffer);
+  }
+
+  public loadSample(): Promise<AudioBuffer> {
+    return this.samples;
+  }
+
+  public resolveSamples(): void {
+    this.resolveSamplesPromise({ duration: 0.8 } as AudioBuffer);
   }
 }
 
@@ -653,16 +870,25 @@ describe("AudioDirector lifecycle and budgets", () => {
 
   it("caps total voices and cancels scheduled audio on pause, hide and dispose", async () => {
     const context = new FakeAudioContext();
-    const director = new AudioDirector(context as unknown as AudioContext);
+    const loader = new FakeAudioAssetLoader();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: loader },
+    );
     await director.activate(enabled);
     expect(director.state).toBe("running");
-    expect(director.activeVoiceCount).toBe(4);
+    expect(director.activeVoiceCount).toBe(1);
     expect(director.debugSnapshot()).toMatchObject({
       contextState: "running",
       activated: true,
+      musicAssetState: "playing",
+      loadedSampleCount: AUDIO_SAMPLE_IDS.length,
       musicTargetGain: 0.5,
       sfxTargetGain: 0.7,
     });
+    expect(context.bufferSources.at(-1)?.loop).toBe(true);
+    expect(loader.loadedSamples.sort()).toEqual([...AUDIO_SAMPLE_IDS].sort());
 
     for (let index = 0; index < 40; index += 1) {
       director.play({
@@ -674,7 +900,7 @@ describe("AudioDirector lifecycle and budgets", () => {
     expect(director.activeVoiceCount).toBeLessThanOrEqual(24);
 
     director.setPaused(true);
-    expect(director.activeVoiceCount).toBe(4);
+    expect(director.activeVoiceCount).toBe(1);
     await director.setHidden(true);
     expect(director.activeVoiceCount).toBe(0);
     expect(director.state).toBe("suspended");
@@ -682,8 +908,226 @@ describe("AudioDirector lifecycle and budgets", () => {
     await director.setHidden(false);
     expect(director.activeVoiceCount).toBe(0);
     await director.activate(enabled);
-    expect(director.activeVoiceCount).toBe(4);
+    expect(director.activeVoiceCount).toBe(1);
+    expect(loader.musicLoads).toBe(1);
     await director.dispose();
+    expect(director.activeVoiceCount).toBe(0);
+    expect(context.state).toBe("closed");
+  });
+
+  it("plays decoded semantic samples while keeping the global source budget", async () => {
+    const context = new FakeAudioContext();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: new FakeAudioAssetLoader() },
+    );
+    await director.activate(enabled);
+
+    const plan = director.play(
+      timeline({
+        weaponId: "nuke",
+        impactTimesMs: [120],
+        resolvedAtMs: 120,
+      }),
+    );
+
+    expect(plan.samples.map(({ sampleId }) => sampleId)).toEqual(
+      expect.arrayContaining([
+        "launch-thruster",
+        "blast-large",
+        "blast-low",
+        "blast-medium",
+      ]),
+    );
+    expect(context.events.filter((event) => event === "sample-start").length)
+      .toBeGreaterThanOrEqual(3);
+    expect(director.activeVoiceCount).toBeLessThanOrEqual(24);
+    await director.dispose();
+  });
+
+  it("starts a future impact after a cold sample cache finishes decoding", async () => {
+    const context = new FakeAudioContext();
+    const loader = new DeferredSamplesAssetLoader();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: loader },
+    );
+    await director.activate(enabled);
+
+    const before = context.events.length;
+    director.play(
+      timeline({
+        weaponId: "nuke",
+        impactTimesMs: [1_200],
+        resolvedAtMs: 1_200,
+      }),
+    );
+    expect(context.events.slice(before)).not.toContain("sample-start");
+
+    loader.resolveSamples();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(context.events.slice(before)).toContain("sample-start");
+    expect(director.debugSnapshot().loadedSampleCount).toBe(
+      AUDIO_SAMPLE_IDS.length,
+    );
+    await director.dispose();
+  });
+
+  it("invalidates a cold-cache impact when the match cancels all audio", async () => {
+    const context = new FakeAudioContext();
+    const loader = new DeferredSamplesAssetLoader();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: loader },
+    );
+    await director.activate(enabled);
+    director.play(
+      timeline({
+        weaponId: "nuke",
+        impactTimesMs: [1_200],
+        resolvedAtMs: 1_200,
+      }),
+    );
+
+    director.cancelAll();
+    const afterCancel = context.events.length;
+    loader.resolveSamples();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(context.events.slice(afterCancel)).not.toContain("sample-start");
+    expect(director.activeVoiceCount).toBe(0);
+    await director.dispose();
+  });
+
+  it("reschedules future impact layers after pause and resume", async () => {
+    const context = new FakeAudioContext();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: new FakeAudioAssetLoader() },
+    );
+    await director.activate(enabled);
+    director.play(
+      timeline({
+        weaponId: "nuke",
+        impactTimesMs: [1_200],
+        resolvedAtMs: 1_200,
+      }),
+    );
+    director.setPaused(true);
+    const beforeResume = context.events.length;
+
+    director.setPaused(false);
+
+    expect(context.events.length).toBeGreaterThan(beforeResume);
+    expect(context.events.slice(beforeResume)).toContain("sample-start");
+    expect(context.events.slice(beforeResume)).toContain("source-start");
+    await director.dispose();
+  });
+
+  it("isolates a music load failure so weapon SFX remain usable", async () => {
+    const context = new FakeAudioContext();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: new FakeAudioAssetLoader("reject") },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await director.activate(enabled);
+
+    expect(director.debugSnapshot()).toMatchObject({
+      contextState: "running",
+      musicAssetState: "error",
+      loadedSampleCount: AUDIO_SAMPLE_IDS.length,
+    });
+    const before = context.events.length;
+    director.play(timeline({ weaponId: "missile" }));
+    expect(context.events.slice(before)).toContain("sample-start");
+    expect(context.events.slice(before)).toContain("source-start");
+
+    await director.dispose();
+    warn.mockRestore();
+  });
+
+  it("reserves procedural fallbacks when every sample decode fails", async () => {
+    const context = new FakeAudioContext();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: new FakeAudioAssetLoader("ready", "reject") },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await director.activate(enabled);
+    expect(director.debugSnapshot().loadedSampleCount).toBe(0);
+
+    const before = context.events.length;
+    const plan = director.play(
+      timeline({
+        weaponId: "deathsHead",
+        impactTimesMs: Array.from(
+          { length: 20 },
+          (_, index) => 240 + index * 35,
+        ),
+      }),
+    );
+    const emitted = context.events.slice(before);
+    expect(plan.samples.length).toBeGreaterThan(0);
+    expect(plan.voices.length).toBeGreaterThanOrEqual(6);
+    expect(emitted.filter((event) => event === "source-start")).toHaveLength(
+      plan.voices.length,
+    );
+    expect(emitted).not.toContain("sample-start");
+
+    await director.dispose();
+    warn.mockRestore();
+  });
+
+  it("stops only the loop when music is disabled and leaves SFX enabled", async () => {
+    const context = new FakeAudioContext();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: new FakeAudioAssetLoader() },
+    );
+    await director.activate(enabled);
+    expect(director.activeVoiceCount).toBe(1);
+
+    director.updateSettings({ ...enabled, musicEnabled: false });
+    expect(director.activeVoiceCount).toBe(0);
+    expect(director.debugSnapshot().musicAssetState).toBe("ready");
+    director.play(timeline({ weaponId: "laser" }));
+    expect(context.events).toContain("sample-start");
+
+    director.updateSettings({ ...enabled, musicEnabled: true });
+    expect(director.activeVoiceCount).toBeGreaterThanOrEqual(1);
+    expect(director.debugSnapshot().musicAssetState).toBe("playing");
+    await director.dispose();
+  });
+
+  it("does not start a stale music source after the director is disposed", async () => {
+    const context = new FakeAudioContext();
+    const loader = new DeferredMusicAssetLoader();
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+      () => undefined,
+      { assetLoader: loader },
+    );
+    await director.activate(enabled);
+    expect(director.debugSnapshot().musicAssetState).toBe("loading");
+
+    await director.dispose();
+    loader.resolveMusic();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(context.bufferSources).toHaveLength(0);
     expect(director.activeVoiceCount).toBe(0);
     expect(context.state).toBe("closed");
   });

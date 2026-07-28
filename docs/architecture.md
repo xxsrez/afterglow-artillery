@@ -27,7 +27,7 @@
 | UI | React 19 и семантический DOM/CSS поверх canvas | крупные touch-controls, layout и доступность вне renderer |
 | Renderer | Canvas 2D | прямое обновление terrain bitmap и достаточный vertical-slice budget |
 | Симуляция | собственные pure TypeScript modules | готовая rigid-body physics не описывает пиксельный рельеф и правила оригинала |
-| Audio | typed event plans + Web Audio director | user gesture, отдельные buses, без внешних ассетов |
+| Audio | typed event plans + локальные CC0 buffers + Web Audio director | семантические sample layers, procedural fallback, отдельные buses и mobile lifecycle |
 | Хранение | match в памяти, audio settings в localStorage | vertical slice не требует аккаунтов |
 | Unit tests | Vitest | быстрые детерминированные тесты домена |
 | Render smoke | Node test против production worker | проверка HTML, metadata и Sites bundle |
@@ -90,9 +90,13 @@ seeded PRNG.
 и audio cues. Может интерполировать и ускорять показ, но не менять domain state.
 
 Audio adapter отделён от React/Canvas: чистый `audioPlanForEvent` переводит
-фактическую shot timeline и outcome в bounded voice plan, а `AudioDirector`
-владеет Web Audio graph, ducking, compressor и lifecycle. Domain не знает о
-громкости или доступности browser audio.
+фактическую shot timeline и outcome в bounded план из sample layers и
+procedural voices. `AudioDirector` владеет decoded-buffer cache, Web Audio
+graph, ducking, compressor и lifecycle. Локальный action-chiptune идёт через
+`fetch → decodeAudioData → AudioBufferSourceNode`, а типизированные CC0
+one-shots различают семантический класс и масштаб воздействия. Procedural
+voices сохраняют weapon signature и fallback при недоступном sample. Domain не
+знает о файлах, лицензиях, громкости или доступности browser audio.
 
 ### UI
 
@@ -160,10 +164,14 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - AudioContext активируется после явного tap/click; Safari playback-session,
   синхронный confirmation source, `suspended`/`interrupted`, bounded timeout и
   обязательная проверка `running` входят в unlock. Apple mobile WebKit без
-  AudioSession API получает HTMLMediaElement media-route fallback. Mute, pause,
-  background, restart и unmount отменяют pending voices и корректно
-  возобновляют score из нового прямого gesture либо показывают явный Retry
-  state.
+  AudioSession API получает HTMLMediaElement media-route fallback. Mute,
+  restart и unmount отменяют pending sources; pause/background сохраняют
+  оставшееся время будущих timeline layers и создают новые nodes после
+  восстановления. Score возобновляется из нового прямого gesture либо UI
+  показывает явный Retry state. Асинхронная загрузка музыки и samples
+  начинается только после успешного unlock, не задерживает его и изолирует
+  ошибки: отказ music asset не отключает SFX, а отказ one-shot оставляет
+  procedural fallback.
 - Resize, orientation change и safe areas входят в обязательные
   lifecycle-сценарии.
 
@@ -195,6 +203,9 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
   offline/installability действительно улучшают использование.
 
 Никакая игровая логика не должна зависеть от CDN после загрузки матча.
+Лицензированные аудиофайлы входят в статический Sites bundle; provenance,
+лицензии, преобразования и контрольные суммы ведутся в
+[справочнике аудиоассетов](reference/audio-assets.md).
 
 ## 10. Проверка архитектуры
 
@@ -204,12 +215,15 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
 2. material grid поддерживает crater, fill, пещеры и bounded settling;
 3. все 33 позиции используют общий каталог и не меняют outcome из VFX;
 4. production worker возвращает корректный HTML и social metadata;
-5. touch-flow остаётся целевой проверкой на физическом телефоне;
-6. performance trace на reference device остаётся обязательным до заявлений о
+5. аудиопланы ограничивают общее число procedural/sample layers, а отсутствие
+   music/sample asset не нарушает процедурный SFX fallback;
+6. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
+7. performance trace на reference device остаётся обязательным до заявлений о
    производительности на физическом устройстве.
 
-Первые четыре пункта проверяются автоматикой и browser smoke. Последние два
-нельзя считать подтверждёнными без реального устройства и trace.
+Первые пять пунктов проверяются автоматикой и browser smoke. Последние два
+нельзя считать подтверждёнными без реального устройства, прослушивания и
+trace.
 
 ## 11. Риски
 
@@ -219,6 +233,10 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
 - Детерминизм JavaScript float требует явных правил округления и порядка
   итерации.
 - Большие VFX могут упереться в fill rate раньше, чем в число объектов.
+- Декодированный музыкальный buffer и sample cache увеличивают расход памяти;
+  нужен замер на целевом телефоне, а не оценка только по размеру MP3/WAV.
+- Технически успешный audio graph не доказывает качество микса на физическом
+  mono-динамике, в headphones и при системном Silent Mode.
 - Exact balance оригинала ограничен отсутствием исходного кода и полных формул.
 
 ## 12. Внешние технические источники

@@ -25,9 +25,11 @@
    измерения `current → proposed`, три envelope и performance budgets.
 9. [Оригинальная игра](reference/original-game.md) — полный source-backed
    каталог из 33 weapons, экономика и неизвестные параметры Scorched Earth 1.5.
-10. [Проверка shield showcase](verification/shield-showcase.md) —
+10. [Происхождение аудио-ассетов](reference/audio-assets.md) — CC0-источники,
+    исходные имена, преобразования и SHA-256 публичных music/SFX files.
+11. [Проверка shield showcase](verification/shield-showcase.md) —
    воспроизводимый seed, stimulus и обязательные реакции пяти семейств.
-11. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
+12. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
     representative small/medium/cluster/terrain/nuclear styleframes.
 
 ## Пути чтения

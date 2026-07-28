@@ -1,5 +1,27 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+
+const AUDIO_ASSETS = [
+  "afterglow-action-loop-v1.mp3",
+  "blast-small.wav",
+  "blast-medium.wav",
+  "blast-large.wav",
+  "blast-low.wav",
+  "impact-soil.wav",
+  "impact-rock.wav",
+  "impact-hull.wav",
+  "shield-field.wav",
+  "laser-small.wav",
+  "laser-large.wav",
+  "launch-thruster.wav",
+  "fire-whoosh.wav",
+];
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -100,4 +122,54 @@ test("routes safe image transforms through the Sites image binding", async () =>
   assert.deepEqual(outputOptions, { format: "image/webp", quality: 80 });
   assert.equal(response.headers.get("content-type"), "image/webp");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("copies every versioned music and SFX asset into the production bundle", async () => {
+  for (const filename of AUDIO_ASSETS) {
+    const [source, bundled] = await Promise.all([
+      readFile(new URL(`../public/audio/${filename}`, import.meta.url)),
+      readFile(new URL(`../dist/client/audio/${filename}`, import.meta.url)),
+    ]);
+    assert.ok(source.byteLength > 1_000, `${filename} must contain real audio`);
+    assert.equal(
+      sha256(bundled),
+      sha256(source),
+      `${filename} changed while being copied to dist`,
+    );
+  }
+});
+
+test("routes versioned audio URLs through the production asset binding", async () => {
+  const worker = await loadWorker();
+  for (const [filename, contentType] of [
+    ["afterglow-action-loop-v1.mp3", "audio/mpeg"],
+    ["blast-large.wav", "audio/wav"],
+  ]) {
+    const bundled = await readFile(
+      new URL(`../dist/client/audio/${filename}`, import.meta.url),
+    );
+    let requestedPath = "";
+    const response = await worker.fetch(
+      new Request(`http://localhost/audio/${filename}`),
+      {
+        ASSETS: {
+          fetch: async (request) => {
+            requestedPath = new URL(request.url).pathname;
+            return new Response(bundled, {
+              headers: { "content-type": contentType },
+            });
+          },
+        },
+      },
+      {
+        waitUntil() {},
+        passThroughOnException() {},
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(requestedPath, `/audio/${filename}`);
+    assert.equal(response.headers.get("content-type"), contentType);
+    assert.equal(sha256(Buffer.from(await response.arrayBuffer())), sha256(bundled));
+  }
 });

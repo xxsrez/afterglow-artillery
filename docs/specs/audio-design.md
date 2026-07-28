@@ -11,18 +11,28 @@
 разрушение и передачу хода. Оно усиливает ритм hot-seat матча, но никогда не
 становится источником состояния симуляции.
 
-Музыкальное направление — собственный спокойный ретрофутуристический
-procedural score около `72–84 BPM`. В продукт не входят музыка, мелодии или
-sound assets оригинальной игры. Слышимый контент синтезируется Web Audio;
-встроенный почти нулевой PCM используется только как технический media-route
-bridge для Apple WebKit без AudioSession API и не является частью score.
+Музыкальное направление Quick Demo — энергичный action-chiptune loop,
+достаточно ритмичный для артиллерийского матча и не конкурирующий с
+кульминациями оружия. Текущая композиция Juhani Junkala выбрана из набора
+`5 Chiptunes (Action)`, опубликованного под CC0, нормализована для игрового
+микса и поставляется локально вместе с приложением.
+
+SFX используют собственную комбинацию CC0 one-shot samples Kenney и
+синтезируемых Web Audio signatures. В продукт не входят музыка, мелодии или
+sound assets оригинальной игры. Источник, лицензия, локальная обработка и
+контрольные суммы файлов фиксируются в
+[справочнике аудиоассетов](../reference/audio-assets.md). Встроенный почти
+нулевой PCM используется только как технический media-route bridge для Apple
+WebKit без AudioSession API и не является частью score.
 
 ## 2. Граница systems
 
 `app/game/audio-system.ts` — отдельный presentation module. Он принимает
-типизированный `GameAudioEvent`, строит чистый `AudioPlan` и только затем
-исполняет его через Web Audio. `lib/game/` не импортирует `AudioContext`, DOM,
-время или storage.
+типизированный `GameAudioEvent`, строит чистый `AudioPlan` из sample layers и
+procedural voices и только затем исполняет его через Web Audio. Загрузка
+локальных файлов из `public/audio/` вынесена в отдельный adapter:
+`fetch → ArrayBuffer → decodeAudioData → AudioBuffer`. `lib/game/` не
+импортирует `AudioContext`, DOM, время, storage или сведения об ассетах.
 
 Входные события используют уже рассчитанные данные:
 
@@ -32,7 +42,8 @@ bridge для Apple WebKit без AudioSession API и не является ча
 - `resolution` получает материал, фактические изменения health, direct-hit и
   destruction flags, ordered `ShieldEvent` и признак осыпания terrain;
 - `ui` описывает выбор, магазин, pause/resume, смену хода и результаты;
-- `music` задаёт состояние score, но не меняет фазу матча.
+- состояние music bus управляет воспроизведением, паузой и ducking, но не
+  меняет фазу матча.
 
 Планирование детерминировано переданным seed. Глобальная случайность и время в
 выборе cue не используются.
@@ -40,42 +51,67 @@ bridge для Apple WebKit без AudioSession API и не является ча
 ## 3. Профили оружия
 
 `SoundProfile` существует для всех `33` canonical weapons и `10`
-Experimental Ultimates. У каждого item собственная комбинация:
+Experimental Ultimates. Помимо семейства, профиль хранит семантический масштаб
+impact — `small`, `medium`, `large` либо `ultimate`. У каждого item собственная
+комбинация:
 
 - трёхчастотного motif;
 - двух waveform;
 - attack, impact, tail и rhythm;
 - stereo motion;
-- списка фаз и voice budget.
+- списка фаз и общего layer budget;
+- sample archetype и масштаба, определяющих физический характер impact.
 
-Варианты одного семейства различаются не только громкостью. Одновременно один
-event создаёт не более `12` voices; Experimental профиль дополнительно
-ограничивается своим quality budget.
+Варианты одного семейства различаются не только громкостью. Малый blast
+получает короткий crunch, средний — более плотный impact, большой и ultimate —
+отдельный крупный blast, низкочастотное основание, более длинный хвост и
+слышимую на телефоне mid-frequency опору. Terrain, hull, shield, laser, fire и
+launch используют собственные материал и движение, а не один и тот же
+«взрывной» cue. Pitch variation, pan и timing выводятся из seed.
+
+Sample layers накладываются поверх процедурного motif: synthesis сохраняет
+узнаваемую подпись weapon и остаётся fallback, если отдельный файл не
+загрузился или не декодировался. Один event планирует не более `12` суммарных
+sample/procedural layers; Experimental профиль дополнительно ограничивается
+своим quality budget.
 
 ## 4. Щиты, корпус и terrain
 
 Все варианты доменного `ShieldEvent` имеют отдельный cue: `absorb`, `break`,
 `deflect`, `bypass` и `laser-immunity`. Пять защитных семейств различаются
-частотой и/или waveform; `None` не изображается как активное поле.
+sample layer, частотой и/или waveform; `None` не изображается как активное
+поле.
 
 Health loss разделён на `light`, `medium`, `heavy` и `critical`; direct hull
 hit, однократное пересечение critical-порога, fall/landing, destruction и
 terrain collapse добавляют отдельные слои. Impact material различает `air`,
-`soil`, `rock`, `liquid-fire` и `hull`.
+`soil`, `rock`, `liquid-fire` и `hull`. Для soil, rock, hull, field, laser,
+fire и thruster используются отдельные CC0 one-shots; procedural voice
+сохраняет information cue даже при ошибке ассета.
 
 ## 5. Музыка и микс
 
-Непрерывная музыка синтезируется четырьмя мягкими oscillator voices с медленным
-detune movement. Основная энергия остаётся не ниже примерно `130 Hz`, а верхние
-voices доходят до `587 Hz`, чтобы score не исчезал на маленьком динамике
-телефона. Состояния `intro`, `aiming`, `flight`, `shop`,
-`round-result` и `match-end` меняют гармонический слой без перезапуска
-симуляции. Во время громких событий score ducked.
+Локальный MP3 action-chiptune загружается после успешного unlock, декодируется
+в `AudioBuffer` и проигрывается одним зацикленным `AudioBufferSourceNode`.
+Источник подключён к существующему графу
+`musicGain → duckGain → masterGain → compressor → destination`; во время
+громких событий score ducked.
+
+Текущий Quick Demo содержит один непрерывный loop. Состояния `intro`, `aiming`,
+`flight`, `shop`, `round-result` и `match-end` пока не имеют шести отдельных
+аранжировок и не меняют гармонию: lifecycle, pause, настройки bus и ducking
+управляют только воспроизведением и уровнем одного loop. Динамический score
+остаётся будущим улучшением, а не заявленной возможностью текущей версии.
 
 Граф разделён на music и SFX, а SFX — на `weapon`, `shieldArmor`,
 `impactTerrain` и `ui`. Перед destination стоит compressor. Общий предел —
-`24` одновременных audible voices, включая музыку; при переполнении
-низкоприоритетный voice уступает более важному.
+`24` одновременных audible sources, включая музыку, samples и procedural
+voices; при переполнении низкоприоритетный source уступает более важному.
+
+Загрузка музыки и sample cache запускается асинхронно после активации context и
+не входит в критический unlock timeout. Ошибка music fetch/decode не закрывает
+`AudioContext` и не выключает SFX. Ошибка отдельного one-shot также не отменяет
+остальные слои event: слышимым fallback остаётся procedural signature.
 
 Пользовательская громкость применяется ровно один раз на общем music/SFX bus.
 Профиль отдельного cue хранит нормализованный gain и не умножает volume
@@ -112,10 +148,12 @@ ambient sound. На остальных платформах fallback не соз
 пользовательская проверка, а не автоматическое доказательство физического
 динамика.
 
-Mute отменяет соответствующие voices. Pause, background, restart и unmount
-отменяют pending SFX и/или continuous music согласно lifecycle; скрытая
-вкладка suspends context и media bridge. После возвращения UI требует новый
-прямой Retry/Resume tap и только затем создаёт актуальный music state.
+Mute, restart и unmount отменяют соответствующие sources. Pause и background
+останавливают их, но сохраняют оставшееся время будущих timeline layers; при
+возобновлении создаются новые nodes с оставшейся задержкой. Остановленный
+`AudioBufferSourceNode` не переиспользуется. Скрытая вкладка suspends context и
+media bridge. После возвращения UI требует новый прямой Retry/Resume tap и
+только затем создаёт актуальные music и отложенные SFX sources.
 WebKit-состояние `interrupted` обрабатывается как восстанавливаемое, но не
 аудируемое: UI показывает причину и предлагает новый прямой Retry tap.
 Production diagnostics сохраняет state, current time, AudioSession, активные
@@ -132,10 +170,16 @@ voices и значения music/SFX/category gains без пользовате�
 Автоматически проверяются:
 
 - полное покрытие `33 + 10`, уникальность профилей и budgets;
+- выбор разных sample archetype/scale для малого, среднего, большого и
+  ultimate impact и суммарный предел sample/procedural layers;
 - фактические timestamps multi-impact и отсутствие child impacts при fizzle;
 - все shield variants/families, damage buckets, material и collapse;
 - независимость Music/SFX, нормализация и persistence;
-- предел `24`, pause/background/dispose cleanup;
+- предел `24`, pause/background reschedule и dispose cleanup;
+- один loop source на активный score, корректное создание нового source после
+  stop и изоляция music/sample load failures от процедурных SFX;
+- запуск будущего impact после завершения cold-cache decode, если его
+  фактический deadline ещё не прошёл;
 - `suspended → running`, `interrupted → running`, rejected `resume()` и
   false-positive `resume()`, после которого state не стал `running` или
   clock остался заморожен;
@@ -143,7 +187,7 @@ voices и значения music/SFX/category gains без пользовате�
   `confirmation source.start() → media bridge → resume()`;
 - выбор AudioSession `playback` при наличии API и Apple mobile fallback при его
   отсутствии;
-- phone-audible диапазон score и отдельный высокочастотный sound-check cue.
+- отдельный высокочастотный sound-check cue.
 
 Browser smoke проверяет наличие controls, сохранение настроек, запуск после
 gesture, pause/resume и отсутствие runtime errors. Субъективный listening test,
