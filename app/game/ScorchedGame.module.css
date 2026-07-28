@@ -235,7 +235,10 @@
 .iconButton:focus-visible,
 .stepButton:focus-visible,
 .fireButton:focus-visible,
-.weaponCard:focus-visible,
+.weaponTrigger:focus-visible,
+.weaponDialogClose:focus-visible,
+.weaponFilter:focus-visible,
+.weaponOption:focus-visible,
 .modalButton:focus-visible,
 .shopCard:focus-visible,
 .toggleButton:focus-visible,
@@ -248,7 +251,7 @@
 .iconButton:disabled,
 .stepButton:disabled,
 .fireButton:disabled,
-.weaponCard:disabled {
+.weaponTrigger:disabled {
   cursor: default;
   opacity: 0.46;
 }
@@ -289,7 +292,7 @@
 }
 
 .controlPanel,
-.weaponRail {
+.weaponControl {
   border: 1px solid rgba(143, 203, 235, 0.19);
   border-radius: 7px;
   background: rgba(11, 14, 16, 0.92);
@@ -363,59 +366,327 @@
   cursor: pointer;
 }
 
-.weaponRail {
+.weaponControl {
   min-width: 0;
   padding: 7px;
 }
 
-.weaponList {
+.weaponTrigger {
   display: grid;
-  grid-auto-columns: minmax(86px, 1fr);
-  grid-auto-flow: column;
-  gap: 6px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  scroll-snap-type: x proximity;
-}
-
-.weaponList::-webkit-scrollbar {
-  display: none;
-}
-
-.weaponCard {
-  position: relative;
-  min-width: 0;
-  min-height: 66px;
-  padding: 8px 7px 7px;
-  overflow: hidden;
-  border: 1px solid rgba(143, 203, 235, 0.13);
-  border-radius: 12px;
-  color: #c8dbe7;
-  background: rgba(79, 128, 160, 0.07);
+  width: 100%;
+  min-height: 82px;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid
+    color-mix(in srgb, var(--weapon-color) 42%, rgba(143, 203, 235, 0.16));
+  border-radius: 13px;
+  color: #eef9ff;
+  background:
+    linear-gradient(
+      132deg,
+      color-mix(in srgb, var(--weapon-color) 16%, transparent),
+      transparent 58%
+    ),
+    rgba(52, 92, 120, 0.1);
+  box-shadow: inset 0 0 24px
+    color-mix(in srgb, var(--weapon-color) 7%, transparent);
   text-align: left;
-  scroll-snap-align: center;
   cursor: pointer;
 }
 
-.weaponCard::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--weapon-color);
-  content: "";
-  opacity: 0.5;
+.weaponTrigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--weapon-color) 66%, #dff7ff 16%);
+  transform: translateY(-1px);
 }
 
-.weaponCardSelected {
-  border-color: color-mix(in srgb, var(--weapon-color) 65%, transparent);
+.weaponTriggerIcon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid
+    color-mix(in srgb, var(--weapon-color) 42%, transparent);
+  border-radius: 13px;
+  color: var(--weapon-color);
+  background: color-mix(in srgb, var(--weapon-color) 12%, transparent);
+  font-size: 24px;
+  text-shadow: 0 0 18px
+    color-mix(in srgb, var(--weapon-color) 72%, transparent);
+}
+
+.weaponTriggerCopy,
+.weaponTriggerMeta {
+  min-width: 0;
+}
+
+.weaponTriggerCopy {
+  display: grid;
+  gap: 2px;
+}
+
+.weaponTriggerEyebrow,
+.weaponTriggerRole,
+.weaponTriggerMeta span {
+  color: #829daf;
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.weaponTriggerName {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weaponTriggerRole {
+  color: color-mix(in srgb, var(--weapon-color) 74%, #a9c2d3);
+  letter-spacing: 0.05em;
+  text-transform: none;
+}
+
+.weaponTriggerMeta {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  text-align: right;
+}
+
+.weaponTriggerMeta strong {
   color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weaponDialog {
+  width: min(940px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(720px, calc(100dvh - 32px));
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(133, 215, 250, 0.32);
+  border-radius: 21px;
+  color: #eef9ff;
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--weapon-color) 19%, transparent), transparent 65%),
-    rgba(65, 111, 143, 0.14);
+    radial-gradient(circle at 50% 0%, rgba(41, 139, 190, 0.16), transparent 45%),
+    rgba(4, 12, 22, 0.98);
   box-shadow:
-    inset 0 0 22px color-mix(in srgb, var(--weapon-color) 8%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--weapon-color) 10%, transparent);
+    0 34px 90px rgba(0, 0, 0, 0.72),
+    inset 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.weaponDialog::backdrop {
+  background: rgba(1, 6, 12, 0.76);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.weaponDialogShell {
+  display: grid;
+  max-height: min(720px, calc(100dvh - 32px));
+  grid-template-rows: auto auto minmax(0, 1fr);
+  padding: 18px;
+}
+
+.weaponDialogHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.weaponDialogHeader h2 {
+  margin: 2px 0 0;
+  font-size: clamp(23px, 3vw, 34px);
+  letter-spacing: -0.04em;
+}
+
+.weaponDialogHeader p {
+  margin: 4px 0 0;
+  color: #8da9bb;
+  font-size: 10px;
+}
+
+.weaponDialogEyebrow {
+  color: var(--cyan) !important;
+  font-size: 8px !important;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.weaponDialogClose {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(143, 203, 235, 0.24);
+  border-radius: 14px;
+  color: #d8edf8;
+  background: rgba(96, 159, 194, 0.09);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.weaponFilterRow {
+  display: flex;
+  gap: 7px;
+  margin: 15px 0 12px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.weaponFilterRow::-webkit-scrollbar {
+  display: none;
+}
+
+.weaponFilter {
+  min-width: max-content;
+  min-height: 44px;
+  padding: 0 15px;
+  border: 1px solid rgba(143, 203, 235, 0.17);
+  border-radius: 999px;
+  color: #9db5c6;
+  background: rgba(63, 112, 143, 0.08);
+  font-size: 9px;
+  font-weight: 780;
+  cursor: pointer;
+}
+
+.weaponFilterActive {
+  border-color: rgba(101, 224, 255, 0.64);
+  color: #ecfbff;
+  background: rgba(66, 195, 232, 0.15);
+  box-shadow: inset 0 0 16px rgba(66, 195, 232, 0.07);
+}
+
+.weaponGrid {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 8px;
+  padding: 2px 3px 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(98, 193, 230, 0.36) transparent;
+}
+
+.weaponOption {
+  display: grid;
+  min-width: 0;
+  min-height: 116px;
+  align-content: space-between;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid rgba(143, 203, 235, 0.15);
+  border-radius: 14px;
+  color: #d7e8f1;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--weapon-color) 8%, transparent),
+      transparent 60%
+    ),
+    rgba(63, 112, 143, 0.06);
+  text-align: left;
+  cursor: pointer;
+}
+
+.weaponOption:hover:not(.weaponOptionUnavailable) {
+  border-color: color-mix(in srgb, var(--weapon-color) 55%, #dff7ff 14%);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--weapon-color) 16%, transparent),
+      transparent 65%
+    ),
+    rgba(63, 112, 143, 0.1);
+  transform: translateY(-1px);
+}
+
+.weaponOptionSelected {
+  border-color: color-mix(in srgb, var(--weapon-color) 72%, #fff 12%);
+  box-shadow:
+    inset 0 0 24px color-mix(in srgb, var(--weapon-color) 9%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--weapon-color) 14%, transparent);
+}
+
+.weaponOptionUnavailable {
+  cursor: not-allowed;
+  filter: saturate(0.2);
+  opacity: 0.52;
+}
+
+.weaponOptionLead,
+.weaponOptionStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.weaponOptionLead {
+  justify-content: flex-start;
+}
+
+.weaponOptionIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--weapon-color);
+  background: color-mix(in srgb, var(--weapon-color) 12%, transparent);
+  font-size: 18px;
+  text-shadow: 0 0 12px
+    color-mix(in srgb, var(--weapon-color) 70%, transparent);
+}
+
+.weaponOptionTitle {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.weaponOptionTitle strong {
+  overflow: hidden;
+  color: #f2fbff;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weaponOptionTitle span,
+.weaponOptionDescription,
+.weaponOptionStatus {
+  color: #849dad;
+  font-size: 8px;
+}
+
+.weaponOptionDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.weaponOptionStatus strong {
+  color: color-mix(in srgb, var(--weapon-color) 64%, #dceef7);
+  font-size: 8px;
+}
+
+.weaponOptionStatus span {
+  font-variant-numeric: tabular-nums;
 }
 
 .weaponIcon {
@@ -424,25 +695,8 @@
   color: var(--weapon-color);
   font-size: 17px;
   line-height: 1;
-  text-shadow: 0 0 12px color-mix(in srgb, var(--weapon-color) 70%, transparent);
-}
-
-.weaponName {
-  display: block;
-  overflow: hidden;
-  font-size: 9px;
-  font-weight: 760;
-  letter-spacing: 0.03em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ammo {
-  display: block;
-  margin-top: 2px;
-  color: #7f99ac;
-  font-size: 8px;
-  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 12px
+    color-mix(in srgb, var(--weapon-color) 70%, transparent);
 }
 
 .firePanel {
@@ -1020,20 +1274,45 @@
     height: 48px;
   }
 
-  .weaponRail {
+  .weaponControl {
     padding: 5px;
     border-radius: 12px;
   }
 
-  .weaponList {
-    grid-auto-columns: minmax(72px, 1fr);
-    gap: 4px;
+  .weaponTrigger {
+    min-height: 64px;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    gap: 7px;
+    padding: 6px 7px;
+    border-radius: 11px;
   }
 
-  .weaponCard {
-    min-height: 62px;
-    padding: 7px 6px 6px;
-    border-radius: 10px;
+  .weaponTriggerIcon {
+    width: 42px;
+    height: 42px;
+    border-radius: 11px;
+    font-size: 20px;
+  }
+
+  .weaponTriggerEyebrow,
+  .weaponTriggerMeta span {
+    display: none;
+  }
+
+  .weaponTriggerName {
+    font-size: 11px;
+  }
+
+  .weaponTriggerRole {
+    font-size: 7px;
+  }
+
+  .weaponTriggerMeta {
+    gap: 0;
+  }
+
+  .weaponTriggerMeta strong {
+    font-size: 9px;
   }
 
   .weaponIcon {
@@ -1041,12 +1320,59 @@
     font-size: 15px;
   }
 
-  .weaponName {
-    font-size: 9px;
+  .weaponDialog {
+    width: 100%;
+    max-height: calc(100dvh - 6px);
+    margin: auto 0 0;
+    border-radius: 18px 18px 0 0;
   }
 
-  .ammo {
-    font-size: 8px;
+  .weaponDialogShell {
+    max-height: calc(100dvh - 6px);
+    padding: 12px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .weaponDialogHeader {
+    gap: 10px;
+  }
+
+  .weaponDialogHeader h2 {
+    font-size: 22px;
+  }
+
+  .weaponDialogHeader p:not(.weaponDialogEyebrow) {
+    display: none;
+  }
+
+  .weaponDialogClose {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
+  .weaponFilterRow {
+    margin: 9px 0 8px;
+  }
+
+  .weaponFilter {
+    min-height: 44px;
+    padding-inline: 13px;
+  }
+
+  .weaponGrid {
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 6px;
+  }
+
+  .weaponOption {
+    min-height: 92px;
+    gap: 5px;
+    padding: 8px;
+    border-radius: 11px;
+  }
+
+  .weaponOptionDescription {
+    -webkit-line-clamp: 1;
   }
 
   .firePanel {
@@ -1251,8 +1577,40 @@
     margin-right: 3px;
   }
 
-  .ammo {
-    margin-top: 1px;
+  .weaponDialogShell {
+    padding: 8px 9px calc(7px + env(safe-area-inset-bottom));
+  }
+
+  .weaponDialogHeader h2 {
+    font-size: 18px;
+  }
+
+  .weaponDialogEyebrow {
+    display: none;
+  }
+
+  .weaponFilterRow {
+    margin-block: 5px;
+  }
+
+  .weaponGrid {
+    grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+    gap: 4px;
+  }
+
+  .weaponOption {
+    min-height: 76px;
+    padding: 6px;
+  }
+
+  .weaponOptionDescription {
+    display: none;
+  }
+
+  .weaponOptionIcon {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
   }
 
   .shopEconomy {

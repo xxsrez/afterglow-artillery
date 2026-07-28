@@ -29,9 +29,20 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
 import { getGameKeyboardAction } from "./keyboard-controls";
+import {
+  WEAPON_SELECTOR_FILTERS,
+  isWeaponSelectorCloseKey,
+  isWeaponSelectable,
+  nextWeaponFocus,
+  weaponAmmoCount,
+  weaponCategoryLabel,
+  weaponsForSelectorFilter,
+  type WeaponSelectorFilterId,
+} from "./weapon-selector";
 import styles from "./ScorchedGame.module.css";
 
 const TOTAL_ROUNDS = 3;
@@ -446,18 +457,11 @@ function createGame(seed = 41_705): GameModel {
 }
 
 function weaponAmmo(tank: PlayerTank, weaponId: WeaponId): number {
-  if (catalogWeapon(weaponId).ammo.kind === "unlimited") {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  return tank.inventory[weaponId] ?? 0;
+  return weaponAmmoCount(tank.inventory, weaponId);
 }
 
 function canUseWeapon(tank: PlayerTank, weaponId: WeaponId): boolean {
-  return (
-    catalogWeapon(weaponId).ammo.kind === "unlimited" ||
-    weaponAmmo(tank, weaponId) > 0
-  );
+  return isWeaponSelectable(tank.inventory, weaponId);
 }
 
 function projectileOrigin(tank: PlayerTank): Vector2 {
@@ -2744,18 +2748,98 @@ export default function ScorchedGame() {
   const impactAudioPlayedRef = useRef(false);
   const frameRef = useRef<number | null>(null);
   const lastFrameRef = useRef(0);
+  const weaponDialogRef = useRef<HTMLDialogElement | null>(null);
+  const weaponTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const weaponOptionRefs = useRef<
+    Partial<Record<WeaponId, HTMLButtonElement | null>>
+  >({});
   const [, setRevision] = useState(0);
   const [arsenalFilter, setArsenalFilter] =
     useState<ArsenalFilter>("all");
+  const [weaponSelectorFilter, setWeaponSelectorFilter] =
+    useState<WeaponSelectorFilterId>("all");
+  const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
 
   const model = gameRef.current;
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
+  const selectedWeaponDefinition = catalogWeapon(selectedWeapon);
   const controlsLocked = model.phase !== "aiming" || model.paused;
+  const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
 
   const refresh = useCallback(() => {
     setRevision((revision) => revision + 1);
   }, []);
+
+  const restoreWeaponTriggerFocus = useCallback(() => {
+    requestAnimationFrame(() => weaponTriggerRef.current?.focus());
+  }, []);
+
+  const closeWeaponSelector = useCallback(() => {
+    setWeaponSelectorOpen(false);
+    if (weaponDialogRef.current?.open) {
+      weaponDialogRef.current.close();
+    }
+    restoreWeaponTriggerFocus();
+  }, [restoreWeaponTriggerFocus]);
+
+  const openWeaponSelector = useCallback(() => {
+    const game = gameRef.current;
+    if (
+      game.phase !== "aiming" ||
+      game.paused ||
+      window.matchMedia("(orientation: portrait)").matches
+    ) {
+      return;
+    }
+    setWeaponSelectorFilter("all");
+    setWeaponSelectorOpen(true);
+  }, []);
+
+  useEffect(() => {
+    const portrait = window.matchMedia("(orientation: portrait)");
+    const closeInPortrait = () => {
+      if (portrait.matches && weaponDialogRef.current?.open) {
+        closeWeaponSelector();
+      }
+    };
+
+    portrait.addEventListener("change", closeInPortrait);
+    closeInPortrait();
+    return () => portrait.removeEventListener("change", closeInPortrait);
+  }, [closeWeaponSelector]);
+
+  useEffect(() => {
+    const dialog = weaponDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    if (!weaponSelectorOpen) {
+      if (dialog.open) {
+        dialog.close();
+      }
+      return;
+    }
+
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+
+    const visibleWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
+    const focusWeapon = visibleWeapons.some(
+      (weapon) => weapon.id === selectedWeapon,
+    )
+      ? selectedWeapon
+      : visibleWeapons[0]?.id;
+    const frame = requestAnimationFrame(() => {
+      if (focusWeapon) {
+        weaponOptionRefs.current[focusWeapon]?.focus();
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [selectedWeapon, weaponSelectorFilter, weaponSelectorOpen]);
 
   const ensureAudio = useCallback(async () => {
     if (!gameRef.current.audioEnabled) {
@@ -2960,6 +3044,58 @@ export default function ScorchedGame() {
     },
     [ensureAudio, refresh],
   );
+
+  const selectWeaponFromSelector = useCallback(
+    (weaponId: WeaponId) => {
+      const game = gameRef.current;
+      if (!canUseWeapon(game.tanks[game.activePlayer], weaponId)) {
+        return;
+      }
+      selectWeapon(weaponId);
+      closeWeaponSelector();
+    },
+    [closeWeaponSelector, selectWeapon],
+  );
+
+  const handleWeaponGridKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (isWeaponSelectorCloseKey(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeWeaponSelector();
+      return;
+    }
+
+    if (
+      event.key !== "ArrowLeft" &&
+      event.key !== "ArrowRight" &&
+      event.key !== "ArrowUp" &&
+      event.key !== "ArrowDown" &&
+      event.key !== "Home" &&
+      event.key !== "End"
+    ) {
+      return;
+    }
+
+    const currentOption = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-weapon-id]",
+    );
+    const currentId =
+      (currentOption?.dataset.weaponId as WeaponId | undefined) ??
+      selectedWeapon;
+    const nextId = nextWeaponFocus(
+      selectorWeapons.map((weapon) => weapon.id),
+      currentId,
+      event.key,
+    );
+    if (!nextId) {
+      return;
+    }
+
+    event.preventDefault();
+    weaponOptionRefs.current[nextId]?.focus();
+  };
 
   const cycleWeapon = useCallback(
     (direction: -1 | 1) => {
@@ -3286,6 +3422,8 @@ export default function ScorchedGame() {
     particlesRef.current = [];
     terrainCacheRef.current = null;
     setArsenalFilter("all");
+    setWeaponSelectorFilter("all");
+    setWeaponSelectorOpen(false);
     refresh();
   }, [refresh]);
 
@@ -3473,46 +3611,49 @@ export default function ScorchedGame() {
             </div>
           </section>
 
-          <section className={styles.weaponRail} aria-label="Выбор оружия">
-            <div className={styles.weaponList}>
-              {WEAPONS.map((weapon) => {
-                const ammo = weaponAmmo(activeTank, weapon.id);
-                const available = canUseWeapon(activeTank, weapon.id);
-                return (
-                  <button
-                    type="button"
-                    key={weapon.id}
-                    className={`${styles.weaponCard} ${
-                      selectedWeapon === weapon.id
-                        ? styles.weaponCardSelected
-                        : ""
-                    }`}
-                    style={weaponStyle(weapon.accent)}
-                    onClick={() => selectWeapon(weapon.id)}
-                    disabled={controlsLocked || !available}
-                    aria-pressed={selectedWeapon === weapon.id}
-                    title={`${weapon.name}: ${weapon.description}`}
-                    aria-label={`${weapon.name}, ${
-                      weapon.ammo.kind === "unlimited"
-                        ? "бесконечный запас"
-                        : `боезапас ${ammo}`
-                    }`}
-                  >
-                    <span className={styles.weaponIcon} aria-hidden="true">
-                      {weapon.icon}
-                    </span>
-                    <span className={styles.weaponName}>
-                      {weapon.shortName}
-                    </span>
-                    <span className={styles.ammo}>
-                      {weapon.ammo.kind === "unlimited"
-                        ? "∞ базовый"
-                        : `× ${ammo}`}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+          <section
+            className={styles.weaponControl}
+            aria-label="Текущее оружие"
+          >
+            <button
+              ref={weaponTriggerRef}
+              type="button"
+              className={styles.weaponTrigger}
+              style={weaponStyle(selectedWeaponDefinition.accent)}
+              onClick={openWeaponSelector}
+              disabled={controlsLocked}
+              aria-haspopup="dialog"
+              aria-expanded={weaponSelectorOpen}
+              aria-controls="weapon-selector-dialog"
+              aria-label={`Открыть арсенал: ${selectedWeaponDefinition.name}, ${
+                selectedWeaponDefinition.ammo.kind === "unlimited"
+                  ? "бесконечный запас"
+                  : `боезапас ${weaponAmmo(activeTank, selectedWeapon)}`
+              }`}
+            >
+              <span className={styles.weaponTriggerIcon} aria-hidden="true">
+                {selectedWeaponDefinition.icon}
+              </span>
+              <span className={styles.weaponTriggerCopy}>
+                <span className={styles.weaponTriggerEyebrow}>
+                  Текущее оружие
+                </span>
+                <strong className={styles.weaponTriggerName}>
+                  {selectedWeaponDefinition.name}
+                </strong>
+                <span className={styles.weaponTriggerRole}>
+                  {weaponCategoryLabel(selectedWeaponDefinition.category)}
+                </span>
+              </span>
+              <span className={styles.weaponTriggerMeta}>
+                <strong>
+                  {selectedWeaponDefinition.ammo.kind === "unlimited"
+                    ? "∞ базовый"
+                    : `× ${weaponAmmo(activeTank, selectedWeapon)}`}
+                </strong>
+                <span>Арсенал 33</span>
+              </span>
+            </button>
           </section>
 
           <section
@@ -3558,6 +3699,133 @@ export default function ScorchedGame() {
           </section>
         </div>
       )}
+
+      <dialog
+        id="weapon-selector-dialog"
+        ref={weaponDialogRef}
+        className={styles.weaponDialog}
+        aria-labelledby="weapon-selector-title"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeWeaponSelector();
+        }}
+        onClose={() => {
+          setWeaponSelectorOpen(false);
+          restoreWeaponTriggerFocus();
+        }}
+      >
+        <div className={styles.weaponDialogShell}>
+          <header className={styles.weaponDialogHeader}>
+            <div>
+              <p className={styles.weaponDialogEyebrow}>Arsenal Deck</p>
+              <h2 id="weapon-selector-title">Выберите оружие</h2>
+              <p>
+                Все 33 позиции · стрелки для навигации · Enter для выбора
+              </p>
+            </div>
+            <button
+              type="button"
+              className={styles.weaponDialogClose}
+              onClick={closeWeaponSelector}
+              aria-label="Закрыть арсенал"
+            >
+              ×
+            </button>
+          </header>
+
+          <div
+            className={styles.weaponFilterRow}
+            role="tablist"
+            aria-label="Категории оружия"
+          >
+            {WEAPON_SELECTOR_FILTERS.map((filter) => (
+              <button
+                type="button"
+                role="tab"
+                key={filter.id}
+                className={`${styles.weaponFilter} ${
+                  weaponSelectorFilter === filter.id
+                    ? styles.weaponFilterActive
+                    : ""
+                }`}
+                aria-selected={weaponSelectorFilter === filter.id}
+                onClick={() => setWeaponSelectorFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <div
+            className={styles.weaponGrid}
+            role="listbox"
+            aria-label="Полный каталог оружия"
+            onKeyDown={handleWeaponGridKeyDown}
+          >
+            {selectorWeapons.map((weapon) => {
+              const ammo = weaponAmmo(activeTank, weapon.id);
+              const available = canUseWeapon(activeTank, weapon.id);
+              const selected = selectedWeapon === weapon.id;
+              const status = selected
+                ? "Выбрано"
+                : weapon.ammo.kind === "unlimited"
+                  ? "Базовый"
+                  : available
+                    ? `Боезапас ${ammo}`
+                    : "Нет заряда";
+
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  key={weapon.id}
+                  ref={(node) => {
+                    weaponOptionRefs.current[weapon.id] = node;
+                  }}
+                  data-weapon-id={weapon.id}
+                  className={`${styles.weaponOption} ${
+                    selected ? styles.weaponOptionSelected : ""
+                  } ${!available ? styles.weaponOptionUnavailable : ""}`}
+                  style={weaponStyle(weapon.accent)}
+                  aria-selected={selected}
+                  aria-disabled={!available}
+                  aria-label={`${weapon.name}, ${weaponCategoryLabel(
+                    weapon.category,
+                  )}, ${status}`}
+                  title={weapon.description}
+                  onClick={() => {
+                    if (available) {
+                      selectWeaponFromSelector(weapon.id);
+                    }
+                  }}
+                >
+                  <span className={styles.weaponOptionLead}>
+                    <span
+                      className={styles.weaponOptionIcon}
+                      aria-hidden="true"
+                    >
+                      {weapon.icon}
+                    </span>
+                    <span className={styles.weaponOptionTitle}>
+                      <strong>{weapon.shortName}</strong>
+                      <span>{weaponCategoryLabel(weapon.category)}</span>
+                    </span>
+                  </span>
+                  <span className={styles.weaponOptionDescription}>
+                    {weapon.description}
+                  </span>
+                  <span className={styles.weaponOptionStatus}>
+                    <strong>{status}</strong>
+                    <span>
+                      {weapon.ammo.kind === "unlimited" ? "∞" : `× ${ammo}`}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </dialog>
 
       {model.phase === "intro" && (
         <div className={styles.overlay}>
