@@ -21,13 +21,14 @@ describe("weapon selector", () => {
 
   it("groups every weapon into exactly one visible mechanical category", () => {
     const groupedIds = WEAPON_SELECTOR_FILTERS.filter(
-      ({ id }) => id !== "all",
+      ({ id }) => id !== "all" && id !== "experimental",
     ).flatMap(({ id }) =>
       weaponsForSelectorFilter(id).map(({ id: weaponId }) => weaponId),
     );
 
     expect(groupedIds).toHaveLength(WEAPONS.length);
     expect(new Set(groupedIds)).toEqual(new Set(WEAPON_IDS));
+    expect(weaponsForSelectorFilter("experimental")).toEqual([]);
   });
 
   it("keeps depleted weapons visible but not selectable", () => {

@@ -83,6 +83,9 @@ Classic, где default начинается с бесконечной Baby Miss
 меняет только ammo policy и межраундовый переход:
 
 - все 33 weapons доступны обоим игрокам без расхода inventory;
+- отдельная группа `Experimental Ultimates` содержит ровно 10 собственных
+  showcase-механик; они не входят в canonical 33, Quick Demo inventory,
+  магазин, payout или экономику;
 - selector и current-weapon control показывают `∞`, не фиктивное большое
   число;
 - player-owned выбор оружия, угол и сила остаются независимыми;
@@ -175,8 +178,9 @@ Classic, где default начинается с бесконечной Baby Miss
    сравнением и playtest-данными.
 5. Quick Demo может менять доступность и темп экономики, но не скрыто
    подменять характеристики предмета с тем же идентификатором.
-6. Infinite Arsenal меняет только явную ammo/interround policy; mechanical
-   outcome одного seeded shot совпадает с Quick Demo.
+6. Для canonical 33 Infinite Arsenal меняет только явную ammo/interround
+   policy; mechanical outcome одного seeded shot совпадает с Quick Demo.
+   Experimental 10 являются отдельным явно неканоническим Showcase-слоем.
 7. Release 0.1 применяет неканоническую семейную шкалу radius из
    [ADR 0004](../decisions/0004-quick-demo-effect-scale.md): `1.0–1.8×` к
    прежним demo values. Center damage, falloff, payload count, price и bundle
@@ -277,6 +281,8 @@ Desktop использует тот же layout с мышью, колесом и
 - полный каталог из 33 weapons с одним стартовым finite shot каждого;
 - пять shield families и None с независимым player-owned состоянием в
   Infinite Arsenal showcase;
+- отдельные Experimental 10 с typed registry, seeded event log и независимым
+  player-owned выбором только в Infinite Arsenal;
 - канонические price, bundle size, arms level и inventory cap;
 - детерминированные provisional mechanics для неизвестных формул;
 - явные mechanical/readable/spectacle profiles всех 33 weapons;

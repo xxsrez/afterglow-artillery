@@ -13,7 +13,8 @@ export type WeaponSelectorFilterId =
   | "terrain-destruction"
   | "terrain-creation"
   | "utility"
-  | "energy";
+  | "energy"
+  | "experimental";
 
 interface WeaponSelectorFilter {
   readonly id: WeaponSelectorFilterId;
@@ -40,6 +41,7 @@ export const WEAPON_SELECTOR_FILTERS: readonly WeaponSelectorFilter[] = [
   },
   { id: "utility", label: "Пристрелка", categories: ["utility"] },
   { id: "energy", label: "Энергия", categories: ["energy"] },
+  { id: "experimental", label: "Experimental 10", categories: [] },
 ] as const;
 
 const CATEGORY_LABELS: Record<WeaponCategory, string> = {
@@ -93,11 +95,11 @@ export function isWeaponSelectorCloseKey(key: string): boolean {
   return key === "Escape";
 }
 
-export function nextWeaponFocus(
-  weaponIds: readonly WeaponId[],
-  currentId: WeaponId,
+export function nextWeaponFocus<Id extends string>(
+  weaponIds: readonly Id[],
+  currentId: Id,
   key: string,
-): WeaponId | null {
+): Id | null {
   if (weaponIds.length === 0) {
     return null;
   }

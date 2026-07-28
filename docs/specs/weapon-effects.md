@@ -170,6 +170,35 @@ Funky Bomb получает особенно яркую seeded-хореогра�
 Конкретные provisional damage и scatter parameters остаются частью Quick Demo
 и не заявляются как Classic parity до black-box проверки.
 
+### Experimental Ultimates
+
+Infinite Arsenal дополнительно получает ровно 10 собственных Ultimate, которые
+не входят в canonical 33 и не доступны магазину: Гелиос-столп,
+Гравитационный собор, Зеркальный шторм, Хроноэхо, Портальная комета,
+Кристальная решётка, Магматическая кузница, Хор разломов, Клетка Авроры и
+Кольцо сверхновой.
+
+Единый typed registry задаёт для каждого Ultimate стратегию, footprint,
+четыре длительности, палитру, трёхтоновый audio motif, test seed и бюджеты
+Full/Balanced/Reduced. Pure simulation заранее возвращает ordered event log и
+final terrain/tank state. Presentation только читает результат:
+
+- Helios вырезает вертикальный shaft;
+- Gravity Cathedral проигрывает три pull-pulse, collapse и release;
+- Mirror Storm детонирует bounded bounce-nodes в обратном порядке;
+- Chrono Echo возвращает пять echoes по seeded trajectory;
+- Portal Comet строит entrance/exit pair и bounded mini-volley с fallback;
+- Crystal Lattice превращает Soil в Rock по шестилучевой звезде;
+- Magma Forge сначала создаёт cone, затем выпускает шесть ejecta;
+- Fault Choir строит пять branching underground faults и settle;
+- Aurora Cage фиксирует triangle, три pulses и финальный knockback;
+- Nova Ring вырезает annular trench, сохраняя безопасный центр.
+
+У всех десяти Full/Balanced/Reduced имеют один mechanical result. Reduced
+сохраняет сплошной механический контур и порядок событий, отключая лишний
+shake/glow. Основная механика завершается не позднее пяти секунд; pooled
+particles могут продолжить неблокирующий decorative aftermath.
+
 ## 6. Карточка производства оружия
 
 Перед реализацией эффекта заполняется короткий brief:
@@ -233,6 +262,9 @@ Funky Bomb получает особенно яркую seeded-хореогра�
 - динамическая плотность частиц, но стабильные механические cues;
 - явные per-weapon particle budgets до `220/132/60` для
   Full/Balanced/Reduced и global cap `320`;
+- для Experimental Ultimates — отдельные bounded budgets и caps
+  `600 desktop / 250 phone / 80 Reduced`, object pool и переиспользуемые
+  offscreen Canvas primitives;
 - Canvas 2D остаётся принятым renderer Quick Demo; переход к WebGL допускается
   только после измерения ограничения и отдельного ADR;
 - пауза симуляции и корректное восстановление presentation после возвращения
@@ -271,3 +303,9 @@ Funky Bomb получает особенно яркую seeded-хореогра�
   или audio voices после завершения shot;
 - автоматические проверки не заменяют всё ещё обязательные frame-time trace и
   touch-проверку на физическом устройстве.
+
+Experimental Showcase дополнительно принимается, когда registry содержит
+ровно 10 идентификаторов вне canonical 33, каждый seed воспроизводит одинаковые
+event log/final state, все десять последовательно проходят browser smoke, а
+недоступные physical-device/performance проверки явно вынесены как gap, не
+подменены desktop-эмуляцией.

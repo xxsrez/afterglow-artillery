@@ -2,6 +2,8 @@
 
 import {
   CLASSIC_INTEREST_RATE,
+  EXPERIMENTAL_PARTICLE_CAPS,
+  EXPERIMENTAL_ULTIMATES,
   MAX_INVENTORY,
   Material,
   SeededRandom,
@@ -18,7 +20,9 @@ import {
   createDemoInventory,
   generateTerrain,
   getShield,
+  getExperimentalUltimate,
   getWeaponEffectProfile,
+  isExperimentalUltimateId,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   nextPlayerIndex,
@@ -27,6 +31,7 @@ import {
   quoteWeaponSale,
   restoreAvailableSelectedWeapon,
   resolveRadialDamage,
+  resolveExperimentalUltimate,
   resolveShieldDamage,
   resolveShieldDeflection,
   selectPlayerWeapon,
@@ -36,6 +41,8 @@ import {
   simulateTrajectory,
   updatePlayerAim,
   type DemoMatchMode,
+  type ExperimentalResolutionResult,
+  type ExperimentalUltimateId,
   type ShieldDamageKind,
   type ShieldEvent,
   type ShieldId,
@@ -77,7 +84,7 @@ import styles from "./ScorchedGame.module.css";
 const TOTAL_ROUNDS = 3;
 const MAX_TURNS_PER_ROUND = 12;
 const TANK_HALF_HEIGHT = 11;
-const MAX_ACTIVE_PARTICLES = 320;
+const MAX_ACTIVE_PARTICLES = EXPERIMENTAL_PARTICLE_CAPS.desktop;
 
 const PLAYER_COLORS = ["#d8ff45", "#ff6658"] as const;
 const PLAYER_NAMES = ["Пилот Лайм", "Пилот Коралл"] as const;
@@ -196,8 +203,10 @@ type GamePhase =
   | "matchEnd";
 
 type EffectLevel = "full" | "balanced" | "reduced";
+type PlayableWeaponId = WeaponId | ExperimentalUltimateId;
 
 interface PlayerTank extends Tank {
+  selectedExperimental: ExperimentalUltimateId | null;
   color: string;
   shieldId: ShieldId;
   shield: number;
@@ -253,7 +262,8 @@ type SegmentStyle =
   | "sandhog"
   | "energy"
   | "laser"
-  | "settle";
+  | "settle"
+  | "experimental";
 
 interface FlightSegment {
   path: readonly Vector2[];
@@ -263,8 +273,8 @@ interface FlightSegment {
 }
 
 interface ShotVisual {
-  weaponId: WeaponId;
-  behavior: DemoBehaviorKind;
+  weaponId: PlayableWeaponId;
+  behavior: DemoBehaviorKind | "experimental";
   owner: 0 | 1;
   elapsedMs: number;
   duration: number;
@@ -280,6 +290,7 @@ interface ShotVisual {
   origin: Vector2;
   fizzled: boolean;
   seed: number;
+  experimentalResult?: ExperimentalResolutionResult;
 }
 
 interface Particle {
@@ -440,6 +451,7 @@ function makePlayer(
     y: tankY(terrain, x),
     direction: index === 0 ? 1 : -1,
     selectedWeapon: "babyMissile",
+    selectedExperimental: null,
     angleDegrees: 48,
     power: 400,
     health: 100,
@@ -1113,6 +1125,92 @@ function buildShot(
   };
 }
 
+function buildExperimentalShot(
+  model: GameModel,
+  owner: 0 | 1,
+  ultimateId: ExperimentalUltimateId,
+): ShotVisual {
+  const tank = model.tanks[owner];
+  const definition = getExperimentalUltimate(ultimateId);
+  const shotSeed =
+    model.seed + model.round * 1_003 + model.turn * 37 + definition.testSeed;
+  const origin = projectileOrigin(tank);
+  const trajectory = ballisticPath(model, tank);
+  const basePath = samplePath(trajectory);
+  const impact =
+    basePath[basePath.length - 1] ?? projectileOrigin(tank);
+  const result = resolveExperimentalUltimate({
+    ultimateId,
+    seed: shotSeed,
+    origin,
+    impact,
+    direction: tank.direction,
+    terrain: model.terrain,
+    tanks: model.tanks.map((candidate) => ({
+      id: candidate.id,
+      x: candidate.x,
+      y: candidate.y,
+      health: candidate.health,
+      maxHealth: candidate.maxHealth,
+    })),
+  });
+  const duration = Math.min(
+    5_000,
+    Math.max(2_400, definition.resolutionMs + 320),
+  );
+  const deploymentAt = clamp(
+    definition.anticipationMs / duration,
+    0.16,
+    0.4,
+  );
+  const mechanicNodes = result.eventLog.filter(
+    (
+      event,
+    ): event is Extract<
+      (typeof result.eventLog)[number],
+      { type: "node" }
+    > => event.type === "node" && event.mechanic,
+  );
+  const impactPoints =
+    mechanicNodes.length > 0
+      ? mechanicNodes.map((event) => event.position)
+      : [impact];
+  const impactTimes =
+    mechanicNodes.length > 0
+      ? mechanicNodes.map((event) =>
+          clamp(event.atMs / duration, deploymentAt, 0.97),
+        )
+      : [deploymentAt];
+
+  return {
+    weaponId: ultimateId,
+    behavior: "experimental",
+    owner,
+    elapsedMs: 0,
+    duration,
+    resolvedAt: clamp(definition.resolutionMs / duration, 0.62, 0.99),
+    endsAt: 1,
+    resolved: false,
+    completed: false,
+    segments: [
+      {
+        path: basePath,
+        startsAt: 0.03,
+        endsAt: deploymentAt,
+        style: "experimental",
+      },
+    ],
+    impactPoints,
+    impactTimes,
+    finalPoint: impact,
+    flowPoints: [],
+    origin,
+    fizzled: false,
+    seed: shotSeed,
+    experimentalResult: result,
+  };
+}
+
 function applyDamage(
   model: GameModel,
   attackerIndex: 0 | 1,
@@ -1351,6 +1449,43 @@ function applyShieldDeflection(
 }
 
 function resolveWeapon(model: GameModel, shot: ShotVisual): void {
+  if (shot.experimentalResult) {
+    const previousHealth = new Map(
+      model.tanks.map((tank) => [tank.id, tank.health] as const),
+    );
+    model.terrain = shot.experimentalResult.terrain;
+    model.terrainRevision += 1;
+    for (const resolvedTank of shot.experimentalResult.tanks) {
+      const tank = model.tanks.find(
+        (candidate) => candidate.id === resolvedTank.id,
+      );
+      if (!tank) {
+        continue;
+      }
+      tank.x = resolvedTank.x;
+      tank.y = resolvedTank.y;
+      tank.health = resolvedTank.health;
+      tank.power = Math.min(
+        tank.power,
+        Math.max(
+          260,
+          Math.round(1_000 * (tank.health / tank.maxHealth)),
+        ),
+      );
+      if (tank.id !== model.tanks[shot.owner].id) {
+        model.tanks[shot.owner].damageDealt += Math.max(
+          0,
+          (previousHealth.get(tank.id) ?? tank.health) - tank.health,
+        );
+      }
+    }
+    return;
+  }
+
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    return;
+  }
+
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const resolution = weapon.demoResolution;
@@ -1725,6 +1860,22 @@ function withShieldEvents(model: GameModel, message: string): string {
 }
 
 function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    const ultimate = getExperimentalUltimate(shot.weaponId);
+    const player = model.tanks[shot.owner];
+    const opponent = model.tanks[nextPlayerIndex(shot.owner)];
+    if (opponent.health <= 0 && player.health <= 0) {
+      return `${ultimate.name}: двойное уничтожение. Раунд завершён вничью.`;
+    }
+    if (opponent.health <= 0) {
+      return `${ultimate.name}: ${player.name} выводит соперника из строя.`;
+    }
+    if (player.health <= 0) {
+      return `${ultimate.name}: ${player.name} попадает под собственный эффект.`;
+    }
+    return `${ultimate.name}: детерминированные mechanics разрешены; декоративный aftermath не блокирует следующий ход.`;
+  }
+
   const weapon = catalogWeapon(shot.weaponId);
   if (shot.fizzled) {
     return withShieldEvents(
@@ -1854,7 +2005,7 @@ function prepareNextRound(model: GameModel): void {
 
   model.phase = "aiming";
   model.message = isInfiniteArsenalMode(model.mode)
-    ? `Раунд ${model.round}. Infinite Arsenal: магазин пропущен, все 33 позиции доступны. Ветер ${Math.abs(model.wind)}.`
+    ? `Раунд ${model.round}. Infinite Arsenal: магазин пропущен, canonical 33 и Experimental 10 доступны. Ветер ${Math.abs(model.wind)}.`
     : `Раунд ${model.round}. Проценты 5%: +₡${formatCredits(interestEarned[0])} / ` +
       `+₡${formatCredits(interestEarned[1])}. Ветер ${Math.abs(model.wind)}.`;
 }
@@ -1967,6 +2118,38 @@ function cameraShakeOffset(
     model.effectLevel === "reduced"
   ) {
     return { x: 0, y: 0 };
+  }
+
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    const definition = getExperimentalUltimate(shot.weaponId);
+    const startsAt = clamp(
+      definition.anticipationMs / shot.duration,
+      0.12,
+      0.5,
+    );
+    const endsAt = Math.min(shot.endsAt, startsAt + 0.36);
+    if (progress < startsAt || progress >= endsAt) {
+      return { x: 0, y: 0 };
+    }
+    const local = clamp(
+      (progress - startsAt) / Math.max(0.01, endsAt - startsAt),
+      0,
+      1,
+    );
+    const qualityScale = model.effectLevel === "balanced" ? 0.52 : 1;
+    const amplitude =
+      clamp(
+        1.4 + Math.sqrt(definition.footprint.spectacleRadius) * 0.42,
+        2,
+        9,
+      ) *
+      qualityScale *
+      Math.sin(local * Math.PI);
+    const phase = shot.elapsedMs * 0.058 + shot.seed * 0.17;
+    return {
+      x: Math.sin(phase) * amplitude,
+      y: Math.cos(phase * 1.41) * amplitude * 0.48,
+    };
   }
 
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
@@ -2241,7 +2424,13 @@ function drawTank(
   context.restore();
 }
 
-function segmentColor(style: SegmentStyle, weaponId: WeaponId): string {
+function segmentColor(
+  style: SegmentStyle,
+  weaponId: PlayableWeaponId,
+): string {
+  if (isExperimentalUltimateId(weaponId)) {
+    return getExperimentalUltimate(weaponId).accent;
+  }
   const weapon = catalogWeapon(weaponId);
   switch (style) {
     case "ballistic":
@@ -2257,6 +2446,8 @@ function segmentColor(style: SegmentStyle, weaponId: WeaponId): string {
     case "laser":
     case "settle":
       return weapon.accent;
+    case "experimental":
+      return weapon.accent;
     case "cluster-child":
       return weapon.secondaryAccent;
     case "tracer":
@@ -2269,7 +2460,7 @@ function segmentColor(style: SegmentStyle, weaponId: WeaponId): string {
 function drawProjectile(
   context: CanvasRenderingContext2D,
   segment: FlightSegment,
-  weaponId: WeaponId,
+  weaponId: PlayableWeaponId,
   progress: number,
   reduced: boolean,
   now: number,
@@ -2524,6 +2715,9 @@ function drawImpactEnvelopes(
   progress: number,
   effectLevel: EffectLevel,
 ): void {
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    return;
+  }
   const profile = getWeaponEffectProfile(shot.weaponId);
   if (
     profile.shape !== "radial" &&
@@ -2567,6 +2761,365 @@ function drawImpactEnvelopes(
   });
 }
 
+const experimentalPrimitiveCache = new Map<string, HTMLCanvasElement>();
+
+function experimentalPrimitive(
+  accent: string,
+  secondaryAccent: string,
+): HTMLCanvasElement | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const key = `${accent}:${secondaryAccent}`;
+  const cached = experimentalPrimitiveCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 72;
+  canvas.height = 72;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+  const glow = context.createRadialGradient(36, 36, 2, 36, 36, 34);
+  glow.addColorStop(0, `${secondaryAccent}d9`);
+  glow.addColorStop(0.22, `${accent}b8`);
+  glow.addColorStop(1, `${accent}00`);
+  context.fillStyle = glow;
+  context.fillRect(0, 0, 72, 72);
+  context.strokeStyle = secondaryAccent;
+  context.lineWidth = 2;
+  context.beginPath();
+  for (let point = 0; point < 8; point += 1) {
+    const angle = (Math.PI * 2 * point) / 8 - Math.PI / 2;
+    const radius = point % 2 === 0 ? 19 : 8;
+    const x = 36 + Math.cos(angle) * radius;
+    const y = 36 + Math.sin(angle) * radius;
+    if (point === 0) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
+    }
+  }
+  context.closePath();
+  context.stroke();
+  experimentalPrimitiveCache.set(key, canvas);
+  return canvas;
+}
+
+function strokePolygon(
+  context: CanvasRenderingContext2D,
+  points: readonly Vector2[],
+  close = true,
+): void {
+  const first = points[0];
+  if (!first) {
+    return;
+  }
+  context.beginPath();
+  context.moveTo(first.x, first.y);
+  points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
+  if (close) {
+    context.closePath();
+  }
+  context.stroke();
+}
+
+function drawExperimentalShot(
+  context: CanvasRenderingContext2D,
+  shot: ShotVisual,
+  progress: number,
+  model: GameModel,
+  now: number,
+): void {
+  if (!isExperimentalUltimateId(shot.weaponId) || !shot.experimentalResult) {
+    return;
+  }
+  const definition = getExperimentalUltimate(shot.weaponId);
+  const elapsedMs = progress * shot.duration;
+  const anticipation = clamp(
+    elapsedMs / Math.max(1, definition.anticipationMs),
+    0,
+    1,
+  );
+  const deployment = clamp(
+    (elapsedMs - definition.anticipationMs) /
+      Math.max(1, definition.resolutionMs - definition.anticipationMs),
+    0,
+    1,
+  );
+  const aftermath = clamp(
+    (elapsedMs - definition.resolutionMs) /
+      Math.max(1, shot.duration - definition.resolutionMs),
+    0,
+    1,
+  );
+  const quality =
+    definition.quality[model.effectLevel];
+  const density = clamp(quality.drawOperations / 260, 0.32, 1);
+  const nodes = shot.experimentalResult.eventLog.filter(
+    (
+      event,
+    ): event is Extract<
+      (typeof shot.experimentalResult.eventLog)[number],
+      { type: "node" }
+    > => event.type === "node" && event.atMs <= elapsedMs,
+  );
+  const center = shot.finalPoint;
+  const mechanicalRadius = definition.footprint.mechanicalRadius;
+  const pulse = model.reducedMotion
+    ? 1
+    : 0.96 + Math.sin(now * 0.005 + shot.seed) * 0.04;
+
+  for (const segment of shot.segments) {
+    if (progress >= segment.startsAt && progress <= segment.endsAt) {
+      drawProjectile(
+        context,
+        segment,
+        shot.weaponId,
+        progress,
+        model.reducedMotion,
+        now,
+      );
+    }
+  }
+
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.strokeStyle = definition.accent;
+  context.fillStyle = `${definition.accent}1f`;
+  context.lineWidth = model.effectLevel === "reduced" ? 1.5 : 2.4;
+  context.globalAlpha = Math.min(0.78, 0.2 + anticipation * 0.58);
+
+  // Beat 1: a low-contrast targeting mark, intentionally below flash limits.
+  context.beginPath();
+  context.arc(center.x, center.y, 8 + anticipation * 12, 0, Math.PI * 2);
+  context.stroke();
+  context.beginPath();
+  context.moveTo(center.x - 26, center.y);
+  context.lineTo(center.x + 26, center.y);
+  context.moveTo(center.x, center.y - 26);
+  context.lineTo(center.x, center.y + 26);
+  context.stroke();
+
+  // Beat 2/3: each strategy owns its geometry, motion and reveal rhythm.
+  context.globalAlpha = 0.74 * (1 - aftermath * 0.58);
+  context.strokeStyle = definition.accent;
+  context.fillStyle = `${definition.secondaryAccent}20`;
+  context.shadowColor = definition.accent;
+  context.shadowBlur =
+    model.effectLevel === "reduced" || model.reducedMotion ? 0 : 12;
+
+  switch (definition.strategy) {
+    case "top-down-column": {
+      const shaftWidth = 9 + deployment * 16;
+      const top = lerp(center.y, 0, deployment);
+      const beam = context.createLinearGradient(center.x, top, center.x, center.y);
+      beam.addColorStop(0, `${definition.accent}00`);
+      beam.addColorStop(0.55, `${definition.accent}70`);
+      beam.addColorStop(1, `${definition.secondaryAccent}d0`);
+      context.fillStyle = beam;
+      context.fillRect(center.x - shaftWidth / 2, top, shaftWidth, center.y - top);
+      context.strokeStyle = definition.secondaryAccent;
+      context.beginPath();
+      context.arc(center.x, center.y, mechanicalRadius * deployment, 0, Math.PI * 2);
+      context.stroke();
+      break;
+    }
+    case "gravity-pulses": {
+      const rings = Math.max(1, Math.min(3, nodes.filter((node) => node.role === "pulse").length));
+      for (let ring = 0; ring < rings; ring += 1) {
+        const radius =
+          mechanicalRadius * pulse * (1 - ring * 0.19) * (0.45 + deployment * 0.55);
+        context.beginPath();
+        context.ellipse(center.x, center.y, radius, radius * 0.38, ring * 0.28, 0, Math.PI * 2);
+        context.stroke();
+      }
+      context.beginPath();
+      context.arc(center.x, center.y, 8 + deployment * 15, 0, Math.PI * 2);
+      context.fill();
+      break;
+    }
+    case "reverse-bounce-chain": {
+      const bounceNodes = nodes.filter((node) => node.role === "bounce");
+      strokePolygon(context, bounceNodes.map((node) => node.position), false);
+      [...bounceNodes].reverse().forEach((node, index) => {
+        const radius = 5 + ((elapsedMs * 0.018 + index * 5) % 16);
+        context.save();
+        context.translate(node.position.x, node.position.y);
+        context.rotate(Math.PI / 4 + index * 0.22);
+        context.strokeRect(-radius, -radius, radius * 2, radius * 2);
+        context.restore();
+      });
+      break;
+    }
+    case "trajectory-echoes": {
+      const echoNodes = nodes.filter((node) => node.role === "echo").reverse();
+      strokePolygon(context, [shot.origin, ...echoNodes.map((node) => node.position)], false);
+      echoNodes.forEach((node, index) => {
+        context.beginPath();
+        context.arc(node.position.x, node.position.y, 4 + index * 1.8, -Math.PI / 2, Math.PI * (1.1 + deployment));
+        context.stroke();
+      });
+      break;
+    }
+    case "portal-volley": {
+      const entrance = nodes.find((node) => node.role === "portal-in")?.position;
+      const exit = nodes.find((node) => node.role === "portal-out")?.position;
+      if (entrance) {
+        context.beginPath();
+        context.ellipse(entrance.x, entrance.y, 18, 30 * pulse, 0, 0, Math.PI * 2);
+        context.stroke();
+      }
+      if (exit) {
+        context.save();
+        context.translate(exit.x, exit.y);
+        context.rotate(Math.PI / 4);
+        context.strokeRect(-20, -20, 40, 40);
+        context.restore();
+        if (entrance) {
+          context.setLineDash([8, 9]);
+          strokePolygon(context, [entrance, exit], false);
+          context.setLineDash([]);
+        }
+      }
+      nodes.filter((node) => node.role === "mini-impact").forEach((node) => {
+        context.beginPath();
+        context.arc(node.position.x, node.position.y, 7, 0, Math.PI * 2);
+        context.stroke();
+      });
+      break;
+    }
+    case "rock-transmutation": {
+      const tips = nodes.filter((node) => node.role === "crystal-tip");
+      const radius = mechanicalRadius * deployment;
+      const star = Array.from({ length: 12 }, (_, index) => {
+        const angle = (Math.PI * 2 * index) / 12 - Math.PI / 2;
+        const pointRadius = index % 2 === 0 ? radius : radius * 0.34;
+        return {
+          x: center.x + Math.cos(angle) * pointRadius,
+          y: center.y + Math.sin(angle) * pointRadius,
+        };
+      });
+      strokePolygon(context, star);
+      tips.forEach((node) => strokePolygon(context, [center, node.position], false));
+      break;
+    }
+    case "volcanic-construction": {
+      const halfWidth = mechanicalRadius * 0.72 * deployment;
+      context.beginPath();
+      context.moveTo(center.x - halfWidth, center.y);
+      context.lineTo(center.x, center.y - mechanicalRadius * 0.72 * deployment);
+      context.lineTo(center.x + halfWidth, center.y);
+      context.closePath();
+      context.fill();
+      context.stroke();
+      nodes.filter((node) => node.role === "ejecta").forEach((node, index) => {
+        const controlY = Math.min(center.y, node.position.y) - 58 - index * 4;
+        context.beginPath();
+        context.moveTo(center.x, center.y - mechanicalRadius * 0.45);
+        context.quadraticCurveTo(
+          (center.x + node.position.x) / 2,
+          controlY,
+          node.position.x,
+          node.position.y,
+        );
+        context.stroke();
+      });
+      break;
+    }
+    case "branching-faults": {
+      nodes.filter((node) => node.role === "fault").forEach((node, index) => {
+        const midpoint = {
+          x: lerp(center.x, node.position.x, 0.52),
+          y: lerp(center.y, node.position.y, 0.52) + (index - 2) * 11,
+        };
+        strokePolygon(context, [center, midpoint, node.position], false);
+        context.beginPath();
+        context.ellipse(
+          node.position.x,
+          surfaceForTank(model.terrain, node.position.x) - 2,
+          12 + index * 3,
+          4,
+          0,
+          0,
+          Math.PI * 2,
+        );
+        context.stroke();
+      });
+      break;
+    }
+    case "triangular-pulses": {
+      const anchors = nodes
+        .filter((node) => node.role === "anchor")
+        .map((node) => node.position);
+      strokePolygon(context, anchors);
+      anchors.forEach((anchor, index) => {
+        const curtain = 34 + index * 13 + deployment * 42;
+        context.beginPath();
+        context.moveTo(anchor.x, anchor.y);
+        context.lineTo(anchor.x, anchor.y - curtain);
+        context.stroke();
+      });
+      break;
+    }
+    case "annular-wave": {
+      const inner = 48 * deployment;
+      const outer = mechanicalRadius * deployment;
+      context.beginPath();
+      context.arc(center.x, center.y, inner, 0, Math.PI * 2);
+      context.stroke();
+      context.lineWidth *= 1.7;
+      context.beginPath();
+      context.arc(center.x, center.y, outer, 0, Math.PI * 2);
+      context.stroke();
+      context.lineWidth /= 1.7;
+      if (model.effectLevel !== "reduced") {
+        context.setLineDash([10, 12]);
+        context.beginPath();
+        context.arc(
+          center.x,
+          center.y,
+          definition.footprint.spectacleRadius * deployment,
+          0,
+          Math.PI * 2,
+        );
+        context.stroke();
+        context.setLineDash([]);
+      }
+      break;
+    }
+  }
+
+  // Beat 4: pooled particles carry the long decorative tail after mechanics.
+  const primitive = experimentalPrimitive(
+    definition.accent,
+    definition.secondaryAccent,
+  );
+  if (primitive && model.effectLevel !== "reduced") {
+    const spriteCount = Math.max(1, Math.round(4 * density));
+    for (let sprite = 0; sprite < spriteCount; sprite += 1) {
+      const angle = (Math.PI * 2 * sprite) / spriteCount + now * 0.00015;
+      const radius =
+        definition.footprint.spectacleRadius *
+        (0.18 + deployment * 0.52) *
+        pulse;
+      const size = 34 + (sprite % 2) * 12;
+      context.globalAlpha = 0.28 * (1 - aftermath);
+      context.drawImage(
+        primitive,
+        center.x + Math.cos(angle) * radius - size / 2,
+        center.y + Math.sin(angle) * radius - size / 2,
+        size,
+        size,
+      );
+    }
+  }
+  context.restore();
+}
+
 function drawShot(
   context: CanvasRenderingContext2D,
   shot: ShotVisual,
@@ -2574,6 +3127,11 @@ function drawShot(
   model: GameModel,
   now: number,
 ): void {
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    drawExperimentalShot(context, shot, progress, model, now);
+    return;
+  }
+
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const density =
@@ -2924,6 +3482,7 @@ function drawShot(
 function updateParticles(
   particles: Particle[],
   deltaSeconds: number,
+  pool: Particle[],
 ): void {
   for (const particle of particles) {
     particle.age += deltaSeconds;
@@ -2940,6 +3499,8 @@ function updateParticles(
     if (particle.age < particle.life) {
       particles[writeIndex] = particle;
       writeIndex += 1;
+    } else if (pool.length < MAX_ACTIVE_PARTICLES) {
+      pool.push(particle);
     }
   }
   particles.length = writeIndex;
@@ -2986,8 +3547,88 @@ function spawnImpactParticles(
   particles: Particle[],
   shot: ShotVisual,
   effectLevel: EffectLevel,
+  pool: Particle[],
+  phone: boolean,
 ): void {
   const random = new SeededRandom(`${shot.seed}:presentation`);
+  if (isExperimentalUltimateId(shot.weaponId)) {
+    const definition = getExperimentalUltimate(shot.weaponId);
+    const hardCap =
+      effectLevel === "reduced"
+        ? EXPERIMENTAL_PARTICLE_CAPS.reduced
+        : phone
+          ? EXPERIMENTAL_PARTICLE_CAPS.phone
+          : EXPERIMENTAL_PARTICLE_CAPS.desktop;
+    const requestedBudget = definition.quality[effectLevel].particles;
+    const availableBudget = Math.max(
+      0,
+      Math.min(requestedBudget, hardCap - particles.length),
+    );
+    const centers =
+      shot.experimentalResult?.mechanicPoints.slice(0, 10) ??
+      [shot.finalPoint];
+    const colors = [
+      definition.accent,
+      definition.secondaryAccent,
+      "#fff7dc",
+    ] as const;
+    for (let index = 0; index < availableBudget; index += 1) {
+      const center =
+        centers[index % Math.max(1, centers.length)] ?? shot.finalPoint;
+      const angle =
+        definition.strategy === "top-down-column"
+          ? random.float(-Math.PI * 0.72, -Math.PI * 0.28)
+          : definition.strategy === "volcanic-construction"
+            ? random.float(-Math.PI * 0.92, -Math.PI * 0.08)
+            : random.float(-Math.PI, Math.PI);
+      const speed = random.float(
+        26,
+        clamp(definition.footprint.spectacleRadius * 1.35, 90, 300),
+      );
+      const particle = pool.pop() ?? {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        age: 0,
+        life: 1,
+        size: 1,
+        color: definition.accent,
+        drag: 0.98,
+        gravity: 0,
+        kind: "spark" as const,
+      };
+      particle.x = center.x;
+      particle.y = center.y;
+      particle.vx = Math.cos(angle) * speed;
+      particle.vy = Math.sin(angle) * speed;
+      particle.age = 0;
+      particle.life = random.float(
+        0.8,
+        Math.min(4, definition.aftermathMs / 1_000),
+      );
+      particle.size = random.float(2, effectLevel === "full" ? 7 : 5);
+      particle.color = random.pick(colors);
+      particle.drag =
+        definition.strategy === "gravity-pulses" ? 0.965 : 0.982;
+      particle.gravity =
+        definition.strategy === "top-down-column" ? -34 : 105;
+      particle.kind =
+        definition.strategy === "rock-transmutation" ||
+        definition.strategy === "reverse-bounce-chain"
+          ? "prism"
+          : definition.strategy === "volcanic-construction"
+            ? "ember"
+            : definition.strategy === "branching-faults"
+              ? "soil"
+              : index % 7 === 0
+                ? "smoke"
+                : "spark";
+      particles.push(particle);
+    }
+    return;
+  }
+
   const weapon = catalogWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const profile = getWeaponEffectProfile(shot.weaponId);
@@ -3154,7 +3795,17 @@ function audioTone(
   oscillator.stop(start + duration + 0.03);
 }
 
-function playLaunch(engine: AudioEngine, weaponId: WeaponId): void {
+function playLaunch(
+  engine: AudioEngine,
+  weaponId: PlayableWeaponId,
+): void {
+  if (isExperimentalUltimateId(weaponId)) {
+    const [low, middle, high] =
+      getExperimentalUltimate(weaponId).audioMotif;
+    audioTone(engine, low, 0.28, "sine", middle - low, 0.22);
+    audioTone(engine, middle, 0.22, "triangle", high - middle, 0.15, 0.08);
+    return;
+  }
   const behavior = DEMO_BEHAVIORS[weaponId];
   const tier = behavior.tier;
   const settingsByBehavior: Record<
@@ -3192,7 +3843,18 @@ function playLaunch(engine: AudioEngine, weaponId: WeaponId): void {
   }
 }
 
-function playImpact(engine: AudioEngine, weaponId: WeaponId): void {
+function playImpact(
+  engine: AudioEngine,
+  weaponId: PlayableWeaponId,
+): void {
+  if (isExperimentalUltimateId(weaponId)) {
+    const [low, middle, high] =
+      getExperimentalUltimate(weaponId).audioMotif;
+    audioTone(engine, low, 0.62, "sine", -low * 0.35, 0.25);
+    audioTone(engine, middle, 0.36, "triangle", high - middle, 0.16, 0.08);
+    audioTone(engine, high, 0.22, "sine", -high * 0.45, 0.12, 0.18);
+    return;
+  }
   const behavior = DEMO_BEHAVIORS[weaponId];
   if (behavior.kind === "airburst" || behavior.kind === "leap-frog") {
     const count =
@@ -3289,6 +3951,7 @@ export default function ScorchedGame() {
   const gameRef = useRef<GameModel>(createGame());
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
+  const particlePoolRef = useRef<Particle[]>([]);
   const audioRef = useRef<AudioEngine | null>(null);
   const impactAudioPlayedRef = useRef(false);
   const frameRef = useRef<number | null>(null);
@@ -3298,7 +3961,7 @@ export default function ScorchedGame() {
   const shieldDialogRef = useRef<HTMLDialogElement | null>(null);
   const shieldTriggerRef = useRef<HTMLButtonElement | null>(null);
   const weaponOptionRefs = useRef<
-    Partial<Record<WeaponId, HTMLButtonElement | null>>
+    Partial<Record<PlayableWeaponId, HTMLButtonElement | null>>
   >({});
   const shieldOptionRefs = useRef<
     Partial<Record<ShieldId, HTMLButtonElement | null>>
@@ -3316,9 +3979,46 @@ export default function ScorchedGame() {
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
   const selectedWeaponDefinition = catalogWeapon(selectedWeapon);
+  const selectedExperimentalDefinition =
+    infiniteArsenal && activeTank.selectedExperimental
+      ? getExperimentalUltimate(activeTank.selectedExperimental)
+      : null;
+  const selectedPlayableId: PlayableWeaponId =
+    selectedExperimentalDefinition?.id ?? selectedWeapon;
+  const selectedPlayable = selectedExperimentalDefinition
+    ? {
+        name: selectedExperimentalDefinition.name,
+        icon: selectedExperimentalDefinition.icon,
+        accent: selectedExperimentalDefinition.accent,
+        role: "Experimental Ultimate",
+        stock: "∞ showcase",
+        count: "Experimental 10",
+      }
+    : {
+        name: selectedWeaponDefinition.name,
+        icon: selectedWeaponDefinition.icon,
+        accent: selectedWeaponDefinition.accent,
+        role: weaponCategoryLabel(selectedWeaponDefinition.category),
+        stock: infiniteArsenal
+          ? "∞ showcase"
+          : selectedWeaponDefinition.ammo.kind === "unlimited"
+            ? "∞ базовый"
+            : `× ${weaponAmmo(activeTank, selectedWeapon)}`,
+        count: "Арсенал 33",
+      };
   const activeShieldDefinition = getShield(activeTank.shieldId);
   const controlsLocked = model.phase !== "aiming" || model.paused;
   const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
+  const selectorExperimental =
+    infiniteArsenal &&
+    (weaponSelectorFilter === "all" ||
+      weaponSelectorFilter === "experimental")
+      ? EXPERIMENTAL_ULTIMATES
+      : [];
+  const selectorPlayableIds: readonly PlayableWeaponId[] = [
+    ...selectorWeapons.map((weapon) => weapon.id),
+    ...selectorExperimental.map((ultimate) => ultimate.id),
+  ];
 
   const refresh = useCallback(() => {
     setRevision((revision) => revision + 1);
@@ -3430,11 +4130,19 @@ export default function ScorchedGame() {
     }
 
     const visibleWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
-    const focusWeapon = visibleWeapons.some(
-      (weapon) => weapon.id === selectedWeapon,
-    )
-      ? selectedWeapon
-      : visibleWeapons[0]?.id;
+    const visibleExperimental =
+      infiniteArsenal &&
+      (weaponSelectorFilter === "all" ||
+        weaponSelectorFilter === "experimental")
+        ? EXPERIMENTAL_ULTIMATES
+        : [];
+    const visibleIds: readonly PlayableWeaponId[] = [
+      ...visibleWeapons.map((weapon) => weapon.id),
+      ...visibleExperimental.map((ultimate) => ultimate.id),
+    ];
+    const focusWeapon = visibleIds.includes(selectedPlayableId)
+      ? selectedPlayableId
+      : visibleIds[0];
     const frame = requestAnimationFrame(() => {
       if (focusWeapon) {
         weaponOptionRefs.current[focusWeapon]?.focus();
@@ -3442,7 +4150,12 @@ export default function ScorchedGame() {
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [selectedWeapon, weaponSelectorFilter, weaponSelectorOpen]);
+  }, [
+    selectedPlayableId,
+    infiniteArsenal,
+    weaponSelectorFilter,
+    weaponSelectorOpen,
+  ]);
 
   useEffect(() => {
     const dialog = shieldDialogRef.current;
@@ -3540,7 +4253,11 @@ export default function ScorchedGame() {
       lastFrameRef.current = now;
 
       if (!game.paused) {
-        updateParticles(particlesRef.current, delta);
+        updateParticles(
+          particlesRef.current,
+          delta,
+          particlePoolRef.current,
+        );
       }
 
       drawBackdrop(context, now);
@@ -3591,6 +4308,8 @@ export default function ScorchedGame() {
             particlesRef.current,
             shot,
             game.effectLevel,
+            particlePoolRef.current,
+            window.matchMedia("(max-width: 900px)").matches,
           );
           if (!impactAudioPlayedRef.current && audioRef.current) {
             impactAudioPlayedRef.current = true;
@@ -3667,6 +4386,7 @@ export default function ScorchedGame() {
         refresh();
         return;
       }
+      tank.selectedExperimental = null;
       game.message = weaponStatus(weaponId);
       void ensureAudio();
       refresh();
@@ -3692,6 +4412,29 @@ export default function ScorchedGame() {
     [closeWeaponSelector, selectWeapon],
   );
 
+  const selectExperimentalFromSelector = useCallback(
+    (ultimateId: ExperimentalUltimateId) => {
+      const game = gameRef.current;
+      if (
+        !isInfiniteArsenalMode(game.mode) ||
+        game.phase !== "aiming" ||
+        game.paused
+      ) {
+        return;
+      }
+      const tank = game.tanks[game.activePlayer];
+      const ultimate = getExperimentalUltimate(ultimateId);
+      tank.selectedExperimental = ultimateId;
+      game.message =
+        `${ultimate.name}: Experimental Showcase, бесконечный доступ. ` +
+        `${ultimate.description}`;
+      void ensureAudio();
+      closeWeaponSelector();
+      refresh();
+    },
+    [closeWeaponSelector, ensureAudio, refresh],
+  );
+
   const handleWeaponGridKeyDown = (
     event: ReactKeyboardEvent<HTMLDivElement>,
   ) => {
@@ -3712,9 +4455,12 @@ export default function ScorchedGame() {
     ) {
       event.preventDefault();
       event.stopPropagation();
-      selectWeaponFromSelector(
-        currentOption.dataset.weaponId as WeaponId,
-      );
+      const requestedId = currentOption.dataset.weaponId;
+      if (isExperimentalUltimateId(requestedId)) {
+        selectExperimentalFromSelector(requestedId);
+      } else {
+        selectWeaponFromSelector(requestedId as WeaponId);
+      }
       return;
     }
 
@@ -3730,10 +4476,10 @@ export default function ScorchedGame() {
     }
 
     const currentId =
-      (currentOption?.dataset.weaponId as WeaponId | undefined) ??
-      selectedWeapon;
+      (currentOption?.dataset.weaponId as PlayableWeaponId | undefined) ??
+      selectedPlayableId;
     const nextId = nextWeaponFocus(
-      selectorWeapons.map((weapon) => weapon.id),
+      selectorPlayableIds,
       currentId,
       event.key,
     );
@@ -3851,18 +4597,30 @@ export default function ScorchedGame() {
     }
 
     const owner = game.activePlayer;
-    const weaponId = chooseAvailableWeapon(game, owner);
     const tank = game.tanks[owner];
+    const experimentalId = isInfiniteArsenalMode(game.mode)
+      ? tank.selectedExperimental
+      : null;
+    const weaponId: PlayableWeaponId =
+      experimentalId ?? chooseAvailableWeapon(game, owner);
     game.shieldEvents = [];
     game.tanks.forEach((player) => {
       player.shieldResponse = null;
     });
-    consumePlayerWeapon(tank, weaponId, game.mode);
+    if (!isExperimentalUltimateId(weaponId)) {
+      consumePlayerWeapon(tank, weaponId, game.mode);
+    }
 
     impactAudioPlayedRef.current = false;
-    shotRef.current = buildShot(game, owner, weaponId);
+    shotRef.current = isExperimentalUltimateId(weaponId)
+      ? buildExperimentalShot(game, owner, weaponId)
+      : buildShot(game, owner, weaponId);
     game.phase = "firing";
-    game.message = `${tank.name} запускает «${catalogWeapon(weaponId).name}».`;
+    game.message = `${tank.name} запускает «${
+      isExperimentalUltimateId(weaponId)
+        ? getExperimentalUltimate(weaponId).name
+        : catalogWeapon(weaponId).name
+    }».`;
     refresh();
 
     void ensureAudio().then((audio) => {
@@ -3961,7 +4719,7 @@ export default function ScorchedGame() {
       }
       game.mode = mode;
       game.message = isInfiniteArsenalMode(mode)
-        ? "Infinite Arsenal выбран: все 33 позиции бесконечны, магазин отключён."
+        ? "Infinite Arsenal выбран: канонические 33 и отдельные Experimental 10 доступны бесконечно, магазин отключён."
         : "Quick Demo выбран: finite ammo расходуется, между раундами работает магазин.";
       refresh();
     },
@@ -3972,7 +4730,7 @@ export default function ScorchedGame() {
     const game = gameRef.current;
     game.phase = "aiming";
     game.message = isInfiniteArsenalMode(game.mode)
-      ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите любую из 33 позиций.`
+      ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите каноническое оружие или Experimental Ultimate.`
       : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
     refresh();
     void ensureAudio();
@@ -4164,6 +4922,7 @@ export default function ScorchedGame() {
     gameRef.current.effectLevel = previous.effectLevel;
     shotRef.current = null;
     particlesRef.current = [];
+    particlePoolRef.current = [];
     terrainCacheRef.current = null;
     setArsenalFilter("all");
     setWeaponSelectorFilter("all");
@@ -4428,44 +5187,32 @@ export default function ScorchedGame() {
               ref={weaponTriggerRef}
               type="button"
               className={styles.weaponTrigger}
-              style={weaponStyle(selectedWeaponDefinition.accent)}
+              style={weaponStyle(selectedPlayable.accent)}
               onClick={openWeaponSelector}
               disabled={controlsLocked}
               aria-haspopup="dialog"
               aria-expanded={weaponSelectorOpen}
               aria-controls="weapon-selector-dialog"
               data-game-keyboard-owner="aiming"
-              aria-label={`Открыть арсенал: ${selectedWeaponDefinition.name}, ${
-                infiniteArsenal
-                  ? "бесконечный showcase-доступ"
-                  : selectedWeaponDefinition.ammo.kind === "unlimited"
-                  ? "бесконечный запас"
-                  : `боезапас ${weaponAmmo(activeTank, selectedWeapon)}`
-              }`}
+              aria-label={`Открыть арсенал: ${selectedPlayable.name}, ${selectedPlayable.stock}`}
             >
               <span className={styles.weaponTriggerIcon} aria-hidden="true">
-                {selectedWeaponDefinition.icon}
+                {selectedPlayable.icon}
               </span>
               <span className={styles.weaponTriggerCopy}>
                 <span className={styles.weaponTriggerEyebrow}>
                   Текущее оружие
                 </span>
                 <strong className={styles.weaponTriggerName}>
-                  {selectedWeaponDefinition.name}
+                  {selectedPlayable.name}
                 </strong>
                 <span className={styles.weaponTriggerRole}>
-                  {weaponCategoryLabel(selectedWeaponDefinition.category)}
+                  {selectedPlayable.role}
                 </span>
               </span>
               <span className={styles.weaponTriggerMeta}>
-                <strong>
-                  {infiniteArsenal
-                    ? "∞ showcase"
-                    : selectedWeaponDefinition.ammo.kind === "unlimited"
-                    ? "∞ базовый"
-                    : `× ${weaponAmmo(activeTank, selectedWeapon)}`}
-                </strong>
-                <span>Арсенал 33</span>
+                <strong>{selectedPlayable.stock}</strong>
+                <span>{selectedPlayable.count}</span>
               </span>
             </button>
           </section>
@@ -4506,7 +5253,7 @@ export default function ScorchedGame() {
               className={styles.fireButton}
               onClick={() => void fire()}
               disabled={controlsLocked}
-              aria-label={`Огонь: ${catalogWeapon(selectedWeapon).name}`}
+              aria-label={`Огонь: ${selectedPlayable.name}`}
             >
               Огонь
             </button>
@@ -4534,7 +5281,9 @@ export default function ScorchedGame() {
               <p className={styles.weaponDialogEyebrow}>Arsenal Deck</p>
               <h2 id="weapon-selector-title">Выберите оружие</h2>
               <p>
-                Все 33 позиции · стрелки для навигации · Enter для выбора
+                {infiniteArsenal
+                  ? "Канонические 33 + отдельные Experimental 10 · стрелки и Enter"
+                  : "Все 33 позиции · стрелки для навигации · Enter для выбора"}
               </p>
             </div>
             <button
@@ -4552,7 +5301,10 @@ export default function ScorchedGame() {
             role="tablist"
             aria-label="Категории оружия"
           >
-            {WEAPON_SELECTOR_FILTERS.map((filter) => (
+            {WEAPON_SELECTOR_FILTERS.filter(
+              (filter) =>
+                filter.id !== "experimental" || infiniteArsenal,
+            ).map((filter) => (
               <button
                 type="button"
                 role="tab"
@@ -4650,6 +5402,69 @@ export default function ScorchedGame() {
                 </button>
               );
             })}
+            {selectorExperimental.length > 0 && (
+              <>
+                <div
+                  className={styles.experimentalGroupHeader}
+                  role="presentation"
+                >
+                  <strong>Experimental Ultimates · 10</strong>
+                  <span>
+                    Только Infinite Arsenal · не входят в canonical 33,
+                    магазин и экономику
+                  </span>
+                </div>
+                {selectorExperimental.map((ultimate) => {
+                  const selected =
+                    activeTank.selectedExperimental === ultimate.id;
+                  return (
+                    <button
+                      type="button"
+                      role="option"
+                      key={ultimate.id}
+                      ref={(node) => {
+                        weaponOptionRefs.current[ultimate.id] = node;
+                      }}
+                      data-weapon-id={ultimate.id}
+                      className={`${styles.weaponOption} ${
+                        styles.experimentalOption
+                      } ${
+                        selected ? styles.weaponOptionSelected : ""
+                      }`}
+                      style={weaponStyle(ultimate.accent)}
+                      aria-selected={selected}
+                      aria-label={`${ultimate.name}, Experimental Ultimate, ${
+                        selected ? "выбрано" : "бесконечный showcase-доступ"
+                      }`}
+                      title={`${ultimate.description} Strategy: ${ultimate.strategy}.`}
+                      onClick={() =>
+                        selectExperimentalFromSelector(ultimate.id)
+                      }
+                    >
+                      <span className={styles.weaponOptionLead}>
+                        <span
+                          className={styles.weaponOptionIcon}
+                          aria-hidden="true"
+                        >
+                          {ultimate.icon}
+                        </span>
+                        <span className={styles.weaponOptionTitle}>
+                          <strong>{ultimate.shortName}</strong>
+                          <span>Experimental Ultimate</span>
+                        </span>
+                      </span>
+                      <span className={styles.weaponOptionDescription}>
+                        {ultimate.description}
+                      </span>
+                      <span className={styles.weaponOptionStatus}>
+                        <strong>{selected ? "Выбрано" : "Showcase"}</strong>
+                        <span>∞</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </>
+            )}
           </div>
         </div>
       </dialog>
@@ -4792,8 +5607,8 @@ export default function ScorchedGame() {
               >
                 <strong>Infinite Arsenal</strong>
                 <span>
-                  Неканонический showcase: все 33 позиции бесконечны, без
-                  магазина.
+                  Неканонический showcase: canonical 33 и отдельные
+                  Experimental 10 бесконечны, без магазина.
                 </span>
               </button>
             </div>
@@ -5225,7 +6040,7 @@ export default function ScorchedGame() {
 
       <span className={styles.srOnly} aria-live="assertive">
         {model.phase === "firing"
-          ? `Выстрел: ${catalogWeapon(selectedWeapon).name}`
+          ? `Выстрел: ${selectedPlayable.name}`
           : ""}
       </span>
     </div>

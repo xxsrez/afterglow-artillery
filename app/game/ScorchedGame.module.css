@@ -699,6 +699,46 @@
   scrollbar-color: rgba(98, 193, 230, 0.36) transparent;
 }
 
+.experimentalGroupHeader {
+  display: flex;
+  min-height: 52px;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 5px;
+  padding: 10px 12px;
+  border: 1px solid rgba(197, 118, 255, 0.28);
+  border-radius: 13px;
+  color: #f2ddff;
+  background:
+    linear-gradient(90deg, rgba(183, 92, 255, 0.14), transparent 72%),
+    rgba(75, 46, 104, 0.12);
+}
+
+.experimentalGroupHeader strong {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.experimentalGroupHeader span {
+  color: #bca6c9;
+  font-size: 8px;
+  text-align: right;
+}
+
+.experimentalOption {
+  border-color: color-mix(in srgb, var(--weapon-color) 36%, transparent);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--weapon-color) 15%, transparent),
+      rgba(130, 70, 176, 0.05) 65%
+    ),
+    rgba(63, 112, 143, 0.06);
+}
+
 .weaponOption {
   display: grid;
   min-width: 0;
