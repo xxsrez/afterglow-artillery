@@ -77,6 +77,7 @@ import {
   type AudioPreferences,
   type GameAudioEvent,
   type MusicState,
+  type RuntimeAudioContextState,
   type UiAudioCue,
 } from "./audio-system";
 import {
@@ -260,6 +261,7 @@ interface GameModel {
   paused: boolean;
   audio: AudioPreferences;
   audioAvailable: boolean;
+  audioDiagnostic: string | null;
   reducedMotion: boolean;
   effectLevel: EffectLevel;
   message: string;
@@ -518,6 +520,7 @@ function createGame(seed = 41_705): GameModel {
     paused: false,
     audio: { ...DEFAULT_AUDIO_PREFERENCES },
     audioAvailable: true,
+    audioDiagnostic: null,
     reducedMotion: false,
     effectLevel: "full",
     message: "Настройте угол и силу. Первый выстрел за пилотом Лайм.",
@@ -3897,6 +3900,30 @@ export default function ScorchedGame() {
     setRevision((revision) => revision + 1);
   }, []);
 
+  const handleAudioContextState = useCallback(
+    (state: RuntimeAudioContextState) => {
+      const game = gameRef.current;
+      if (state === "running") {
+        game.audioAvailable = true;
+        game.audioDiagnostic = null;
+      } else if (state === "interrupted") {
+        game.audioAvailable = false;
+        game.audioDiagnostic =
+          "Аудио прервано системой iPhone/iPad. Нажмите повторное подключение после возврата в игру.";
+      } else if (state === "closed") {
+        game.audioAvailable = false;
+        game.audioDiagnostic =
+          "Аудиодвижок закрыт. Нажмите повторное подключение, чтобы создать его заново.";
+      } else if (!document.hidden) {
+        game.audioAvailable = false;
+        game.audioDiagnostic =
+          "Браузер приостановил аудио. Нажмите повторное подключение.";
+      }
+      refresh();
+    },
+    [refresh],
+  );
+
   const ensureAudio = useCallback(async () => {
     const game = gameRef.current;
     if (!game.audio.musicEnabled && !game.audio.sfxEnabled) {
@@ -3904,9 +3931,13 @@ export default function ScorchedGame() {
     }
 
     try {
-      const audio = audioRef.current ?? createAudioDirector();
+      const audio =
+        audioRef.current ??
+        createAudioDirector(handleAudioContextState);
       if (!audio) {
         game.audioAvailable = false;
+        game.audioDiagnostic =
+          "Этот браузер не предоставляет Web Audio API.";
         refresh();
         return null;
       }
@@ -3914,22 +3945,49 @@ export default function ScorchedGame() {
       audio.updateSettings(game.audio);
       audio.setMusicState(audioMusicState(game));
       audio.setPaused(game.paused);
-      await audio.activate(game.audio);
+      const activation = await audio.activate(game.audio);
       const availabilityChanged = !game.audioAvailable;
       game.audioAvailable = true;
+      game.audioDiagnostic = null;
+      console.debug(
+        "[afterglow:audio] activated",
+        JSON.stringify({
+          userActivationIsActive: activation.userActivationIsActive,
+          ...audio.debugSnapshot(),
+        }),
+      );
       if (availabilityChanged) {
         refresh();
       }
       return audio;
-    } catch {
+    } catch (error) {
       const failedAudio = audioRef.current;
       audioRef.current = null;
       game.audioAvailable = false;
+      game.audioDiagnostic =
+        error instanceof Error
+          ? `Браузер не запустил аудио: ${error.message}`
+          : "Браузер не запустил аудио по неизвестной причине.";
+      console.warn(
+        "[afterglow:audio] activation failed",
+        JSON.stringify({
+          contextState: failedAudio?.state ?? "unavailable",
+          userActivationIsActive:
+            navigator.userActivation?.isActive ?? null,
+          error:
+            error instanceof Error
+              ? {
+                  name: error.name,
+                  message: error.message,
+                }
+              : String(error),
+        }),
+      );
       void failedAudio?.dispose().catch(() => undefined);
       refresh();
       return null;
     }
-  }, [refresh]);
+  }, [handleAudioContextState, refresh]);
 
   const playAudioEvent = useCallback(
     async (event: GameAudioEvent) => {
@@ -3939,9 +3997,14 @@ export default function ScorchedGame() {
       }
       try {
         audio.play(event);
-      } catch {
+      } catch (error) {
         audioRef.current = null;
         gameRef.current.audioAvailable = false;
+        gameRef.current.audioDiagnostic =
+          error instanceof Error
+            ? `Ошибка воспроизведения: ${error.message}`
+            : "Неизвестная ошибка воспроизведения.";
+        console.warn("[afterglow:audio] playback failed", error);
         void audio.dispose().catch(() => undefined);
         refresh();
       }
@@ -3959,6 +4022,21 @@ export default function ScorchedGame() {
       });
     },
     [playAudioEvent],
+  );
+
+  const logAudioSmoke = useCallback(
+    (label: string, audio: AudioDirector) => {
+      window.setTimeout(() => {
+        if (audioRef.current !== audio) {
+          return;
+        }
+        console.debug(
+          `[afterglow:audio] ${label}`,
+          JSON.stringify(audio.debugSnapshot()),
+        );
+      }, 180);
+    },
+    [],
   );
 
   const updateAudioPreferences = useCallback(
@@ -4730,16 +4808,20 @@ export default function ScorchedGame() {
           audioRef.current?.setPaused(true);
           refresh();
         }
+        void audioRef.current
+          ?.setHidden(true)
+          .catch((error: unknown) => {
+            console.warn("[afterglow:audio] suspend failed", error);
+          });
+        return;
       }
-      void audioRef.current
-        ?.setHidden(document.hidden)
-        .catch(() => undefined);
+      void ensureAudio();
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [refresh]);
+  }, [ensureAudio, refresh]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -4768,20 +4850,24 @@ export default function ScorchedGame() {
 
   const startMatch = useCallback(() => {
     const game = gameRef.current;
+    const audioActivation = ensureAudio();
     game.phase = "aiming";
     game.message = isInfiniteArsenalMode(game.mode)
       ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите каноническое оружие или Experimental Ultimate.`
       : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
     refresh();
-    void ensureAudio().then((audio) => {
+    void audioActivation.then((audio) => {
       audio?.setMusicState("aiming");
       audio?.play({
         type: "ui",
         cue: "match-start",
         seed: game.seed,
       });
+      if (audio) {
+        logAudioSmoke("start-smoke", audio);
+      }
     });
-  }, [ensureAudio, refresh]);
+  }, [ensureAudio, logAudioSmoke, refresh]);
 
   const openRoundResult = useCallback(() => {
     const game = gameRef.current;
@@ -4943,6 +5029,7 @@ export default function ScorchedGame() {
     gameRef.current = createGame(previous.seed + 1);
     gameRef.current.audio = previous.audio;
     gameRef.current.audioAvailable = previous.audioAvailable;
+    gameRef.current.audioDiagnostic = previous.audioDiagnostic;
     gameRef.current.reducedMotion = previous.reducedMotion;
     gameRef.current.effectLevel = previous.effectLevel;
     shotRef.current = null;
@@ -4978,10 +5065,17 @@ export default function ScorchedGame() {
   }, [playUiAudio, updateAudioPreferences]);
 
   const retryAudio = useCallback(() => {
-    gameRef.current.audioAvailable = true;
-    void ensureAudio();
-    refresh();
-  }, [ensureAudio, refresh]);
+    void ensureAudio().then((audio) => {
+      audio?.play({
+        type: "ui",
+        cue: "resume",
+        seed: gameRef.current.seed + gameRef.current.turn,
+      });
+      if (audio) {
+        logAudioSmoke("retry-smoke", audio);
+      }
+    });
+  }, [ensureAudio, logAudioSmoke]);
 
   const toggleMotion = useCallback(() => {
     const game = gameRef.current;
@@ -5099,13 +5193,19 @@ export default function ScorchedGame() {
         />
       </label>
       {!model.audioAvailable && (
-        <button
-          type="button"
-          className={styles.audioUnavailable}
-          onClick={retryAudio}
-        >
-          Аудио недоступно в браузере — повторить подключение
-        </button>
+        <div className={styles.audioRecovery} aria-live="polite">
+          <p>
+            {model.audioDiagnostic ??
+              "Аудио недоступно в браузере."}
+          </p>
+          <button
+            type="button"
+            className={styles.audioUnavailable}
+            onClick={retryAudio}
+          >
+            Повторно включить аудио
+          </button>
+        </div>
       )}
     </div>
   );
@@ -5215,6 +5315,20 @@ export default function ScorchedGame() {
           {model.paused ? "▶" : "Ⅱ"}
         </button>
       )}
+
+      {(model.phase === "aiming" || model.phase === "firing") &&
+        !model.paused &&
+        !model.audioAvailable && (
+          <button
+            type="button"
+            className={styles.audioRecoveryButton}
+            onClick={retryAudio}
+            aria-label="Аудио отключено — повторно включить"
+          >
+            <span>Аудио отключено</span>
+            <strong>Повторить</strong>
+          </button>
+        )}
 
       {model.phase === "aiming" && (
         <div

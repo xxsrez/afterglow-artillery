@@ -84,9 +84,28 @@ detune movement. Состояния `intro`, `aiming`, `flight`, `shop`,
 выключенных bus. `AudioContext` не создаётся до пользовательского действия.
 Если Web Audio недоступен, UI показывает retry, а матч продолжает работать.
 
+На Safari, где доступен AudioSession API, приложение до создания context
+запрашивает session type `playback`: игра содержит непрерывную музыку, а не
+только системные notification cues. Unlock начинается непосредственно внутри
+Start/Retry gesture, включает короткий локальный silent-buffer warm-up и
+считается успешным только при фактическом `AudioContext.state === "running"` и
+движущемся `currentTime`. Resolved `resume()` при оставшемся
+`suspended`/`interrupted` либо замершем clock не превращается в ложное
+состояние «Вкл».
+
 Mute отменяет соответствующие voices. Pause, background, restart и unmount
 отменяют pending SFX и/или continuous music согласно lifecycle; скрытая
 вкладка suspends context, возвращение создаёт актуальный music state.
+WebKit-состояние `interrupted` обрабатывается как восстанавливаемое, но не
+аудируемое: UI показывает причину и предлагает новый прямой Retry tap.
+Production diagnostics сохраняет state, current time, AudioSession, активные
+voices и значения music/SFX/category gains без пользовательских данных.
+
+Основание для platform-specific ветки: MDN документирует необходимость
+возобновления `interrupted` context в iOS Safari, а W3C Audio Session определяет
+`playback` как отдельный тип длительного воспроизведения:
+[BaseAudioContext.state](https://developer.mozilla.org/en-US/docs/Web/API/BaseAudioContext/state),
+[Audio Session](https://www.w3.org/TR/audio-session/).
 
 ## 7. Проверка
 
@@ -96,10 +115,16 @@ Mute отменяет соответствующие voices. Pause, background, 
 - фактические timestamps multi-impact и отсутствие child impacts при fizzle;
 - все shield variants/families, damage buckets, material и collapse;
 - независимость Music/SFX, нормализация и persistence;
-- предел `24`, pause/background/dispose cleanup.
+- предел `24`, pause/background/dispose cleanup;
+- `suspended → running`, `interrupted → running`, rejected `resume()` и
+  false-positive `resume()`, после которого state не стал `running` или
+  clock остался заморожен;
+- выбор AudioSession `playback` при наличии API.
 
 Browser smoke проверяет наличие controls, сохранение настроек, запуск после
 gesture, pause/resume и отсутствие runtime errors. Субъективный listening test,
 физические iPhone/Android, speakers/headphones/mono и измерение audio callback
 нельзя заменять unit-тестом или desktop viewport; недоступный пункт фиксируется
-как отдельный release gap без ложного заявления о совместимости.
+как отдельный release gap без ложного заявления о совместимости. Даже
+`context.state === "running"`, движущийся clock и ненулевой graph доказывают
+работу scheduler/graph, но не слышимый сигнал конкретного динамика iPhone.

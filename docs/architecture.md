@@ -157,8 +157,10 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - При скрытии вкладки бой ставится на контролируемую паузу: браузеры обычно
   приостанавливают `requestAnimationFrame` в background.
 - Возврат не «догоняет» минуты симуляции одним кадром.
-- AudioContext активируется после явного tap/click; mute, pause, background,
-  restart и unmount отменяют pending voices и корректно возобновляют score.
+- AudioContext активируется после явного tap/click; Safari playback-session,
+  `suspended`/`interrupted` и обязательная проверка `running` входят в unlock.
+  Mute, pause, background, restart и unmount отменяют pending voices и
+  корректно возобновляют score либо показывают явный Retry state.
 - Resize, orientation change и safe areas входят в обязательные
   lifecycle-сценарии.
 

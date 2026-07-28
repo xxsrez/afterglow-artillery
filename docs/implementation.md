@@ -176,6 +176,8 @@ ammo policy.
   эффекты;
 - отдельный audio module синтезирует музыку и event-driven SFX через Web Audio
   после пользовательского действия; все `33 + 10` items имеют typed profile;
+  Safari получает поддерживаемую playback AudioSession, а `resume()` считается
+  успешным только после подтверждённого состояния `running` и движения clock;
 - симуляция не зависит от частиц, звука, частоты кадров и camera shake.
 
 Player-owned combat state хранится на стабильном объекте tank: выбранное
@@ -187,7 +189,9 @@ damage credit и восстановление следующего хода ис
 закрывается и сбрасывает presentation-фильтр. Music/SFX имеют независимые
 persisted on/off и volume; effect intensity, reduced motion, pause, ruleset,
 round, wind и мир остаются общими настройками матча. Аудиограф и lifecycle
-описаны в [спецификации sound design](specs/audio-design.md).
+описаны в [спецификации sound design](specs/audio-design.md). `suspended` и
+WebKit `interrupted` не скрываются за включёнными controls: экран показывает
+диагностируемый recovery state и даёт новый прямой Retry tap.
 Выбранный `DemoMatchMode` также является общей явной настройкой матча.
 
 Чистые системы находятся в `lib/game/`, presentation — в `app/game/`. Их

@@ -28,6 +28,78 @@ export const AUDIO_PREFERENCES_STORAGE_KEY =
   "afterglow-artillery.audio.v1";
 const LEGACY_AUDIO_ENABLED_KEY = "afterglow-artillery.audioEnabled";
 
+export type RuntimeAudioContextState =
+  | AudioContextState
+  | "interrupted";
+
+export interface AudioActivationReport {
+  readonly contextState: "running";
+  readonly audioSessionType: string | null;
+  readonly userActivationIsActive: boolean | null;
+}
+
+export interface AudioDebugSnapshot {
+  readonly contextState: RuntimeAudioContextState;
+  readonly currentTime: number;
+  readonly activeVoiceCount: number;
+  readonly activated: boolean;
+  readonly audioSessionType: string | null;
+  readonly audioSessionState: string | null;
+  readonly musicEnabled: boolean;
+  readonly sfxEnabled: boolean;
+  readonly musicVolume: number;
+  readonly sfxVolume: number;
+  readonly masterGain: number;
+  readonly musicGain: number;
+  readonly sfxGain: number;
+  readonly musicTargetGain: number;
+  readonly sfxTargetGain: number;
+  readonly categoryGains: Readonly<Record<SfxBus, number>>;
+}
+
+export class AudioActivationError extends Error {
+  public readonly contextState: RuntimeAudioContextState;
+
+  public constructor(
+    message: string,
+    contextState: RuntimeAudioContextState,
+  ) {
+    super(message);
+    this.name = "AudioActivationError";
+    this.contextState = contextState;
+  }
+}
+
+interface AudioSessionLike {
+  type: string;
+  readonly state?: string;
+}
+
+interface NavigatorWithAudioSession {
+  readonly audioSession?: AudioSessionLike;
+  readonly userActivation?: {
+    readonly isActive: boolean;
+  };
+}
+
+export function configurePlaybackAudioSession(
+  navigatorLike: NavigatorWithAudioSession | null =
+    typeof navigator === "undefined"
+      ? null
+      : (navigator as NavigatorWithAudioSession),
+): string | null {
+  const session = navigatorLike?.audioSession;
+  if (!session) {
+    return null;
+  }
+  try {
+    session.type = "playback";
+    return session.type;
+  } catch {
+    return null;
+  }
+}
+
 interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -1062,6 +1134,9 @@ function setParam(
 
 export class AudioDirector {
   private readonly context: AudioContext;
+  private readonly onContextStateChange:
+    | ((state: RuntimeAudioContextState) => void)
+    | null;
   private readonly master: GainNode;
   private readonly compressor: DynamicsCompressorNode;
   private readonly musicGain: GainNode;
@@ -1077,10 +1152,17 @@ export class AudioDirector {
   private paused = false;
   private hidden = false;
   private disposed = false;
+  private primed = false;
   private duckTimer: ReturnType<typeof setTimeout> | null = null;
 
-  public constructor(context: AudioContext) {
+  public constructor(
+    context: AudioContext,
+    onContextStateChange: (
+      state: RuntimeAudioContextState,
+    ) => void = () => undefined,
+  ) {
     this.context = context;
+    this.onContextStateChange = onContextStateChange;
     this.master = context.createGain();
     this.compressor = context.createDynamicsCompressor();
     this.musicGain = context.createGain();
@@ -1111,36 +1193,105 @@ export class AudioDirector {
     this.sfxGain.connect(this.master);
     this.master.connect(this.compressor);
     this.compressor.connect(context.destination);
+    this.context.addEventListener?.(
+      "statechange",
+      this.handleContextStateChange,
+    );
   }
 
-  public get state(): AudioContextState {
-    return this.context.state;
+  public get state(): RuntimeAudioContextState {
+    return this.context.state as RuntimeAudioContextState;
   }
 
   public get activeVoiceCount(): number {
     return this.activeVoices.size + this.musicVoices.length;
   }
 
+  public debugSnapshot(): AudioDebugSnapshot {
+    const audioSession =
+      typeof navigator === "undefined"
+        ? null
+        : (navigator as NavigatorWithAudioSession).audioSession ?? null;
+    return {
+      contextState: this.state,
+      currentTime: this.context.currentTime,
+      activeVoiceCount: this.activeVoiceCount,
+      activated: this.activated,
+      audioSessionType: audioSession?.type ?? null,
+      audioSessionState: audioSession?.state ?? null,
+      musicEnabled: this.settings.musicEnabled,
+      sfxEnabled: this.settings.sfxEnabled,
+      musicVolume: this.settings.musicVolume,
+      sfxVolume: this.settings.sfxVolume,
+      masterGain: this.master.gain.value,
+      musicGain: this.musicGain.gain.value,
+      sfxGain: this.sfxGain.gain.value,
+      musicTargetGain:
+        this.activated && this.settings.musicEnabled && !this.hidden
+          ? (this.settings.musicVolume / 100) *
+            (this.paused ? 0.24 : 1)
+          : 0,
+      sfxTargetGain:
+        this.activated && this.settings.sfxEnabled
+          ? this.settings.sfxVolume / 100
+          : 0,
+      categoryGains: {
+        weapon: this.busGains.weapon.gain.value,
+        shieldArmor: this.busGains.shieldArmor.gain.value,
+        impactTerrain: this.busGains.impactTerrain.gain.value,
+        ui: this.busGains.ui.gain.value,
+      },
+    };
+  }
+
   public async activate(
     preferences: AudioPreferences = this.settings,
-  ): Promise<void> {
+  ): Promise<AudioActivationReport> {
     if (this.disposed) {
       throw new Error("AudioDirector has been disposed.");
     }
     this.settings = normalizeAudioPreferences(preferences);
     if (!this.settings.musicEnabled && !this.settings.sfxEnabled) {
-      return;
+      throw new AudioActivationError(
+        "Audio activation was requested while both categories are disabled.",
+        this.state,
+      );
     }
-    if (this.context.state === "suspended") {
+    if (this.state === "closed") {
+      throw new AudioActivationError(
+        "AudioContext is closed.",
+        this.state,
+      );
+    }
+    const userActivationIsActive =
+      typeof navigator === "undefined"
+        ? null
+        : (navigator as NavigatorWithAudioSession).userActivation
+            ?.isActive ?? null;
+    const needsLivenessCheck =
+      !this.activated || this.hidden || this.state !== "running";
+    if (this.state !== "running") {
       await this.context.resume();
     }
-    if (this.context.state === "closed") {
-      throw new Error("AudioContext is closed.");
+    if (this.state !== "running") {
+      throw new AudioActivationError(
+        `AudioContext resume completed without reaching running state (state: ${this.state}).`,
+        this.state,
+      );
     }
+    this.primeOutput();
     this.activated = true;
     this.hidden = false;
     this.applySettings();
     this.ensureMusic();
+    if (needsLivenessCheck) {
+      await this.verifyClockIsAdvancing();
+    }
+    return {
+      contextState: "running",
+      audioSessionType: configurePlaybackAudioSession(),
+      userActivationIsActive,
+    };
   }
 
   public updateSettings(preferences: AudioPreferences): void {
@@ -1211,6 +1362,7 @@ export class AudioDirector {
       !this.activated ||
       this.disposed ||
       this.hidden ||
+      this.state !== "running" ||
       (this.paused && event.type !== "ui")
     ) {
       return plan;
@@ -1249,6 +1401,10 @@ export class AudioDirector {
       return;
     }
     this.disposed = true;
+    this.context.removeEventListener?.(
+      "statechange",
+      this.handleContextStateChange,
+    );
     this.cancelAll();
     [
       ...Object.values(this.busGains),
@@ -1288,7 +1444,8 @@ export class AudioDirector {
       !this.activated ||
       !this.settings.musicEnabled ||
       this.hidden ||
-      this.disposed
+      this.disposed ||
+      this.state !== "running"
     ) {
       return;
     }
@@ -1456,12 +1613,61 @@ export class AudioDirector {
       this.duckTimer = null;
     }, Math.max(120, durationMs));
   }
+
+  private readonly handleContextStateChange = (): void => {
+    const state = this.state;
+    if (state !== "running") {
+      this.cancelSfx();
+      this.stopMusic();
+    } else if (this.activated && !this.hidden && !this.disposed) {
+      this.applySettings();
+      this.ensureMusic();
+    }
+    this.onContextStateChange?.(state);
+  };
+
+  private primeOutput(): void {
+    if (this.primed) {
+      return;
+    }
+    this.primed = true;
+    const source = this.context.createBufferSource();
+    source.buffer = this.context.createBuffer(
+      1,
+      1,
+      this.context.sampleRate,
+    );
+    source.connect(this.master);
+    source.onended = () => {
+      source.disconnect();
+    };
+    source.start();
+  }
+
+  private async verifyClockIsAdvancing(): Promise<void> {
+    const before = this.context.currentTime;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 48);
+    });
+    const after = this.context.currentTime;
+    if (this.state !== "running" || after <= before) {
+      throw new AudioActivationError(
+        `AudioContext reported ${this.state}, but its clock did not advance (${before.toFixed(3)} → ${after.toFixed(3)}).`,
+        this.state,
+      );
+    }
+  }
 }
 
-export function createAudioDirector(): AudioDirector | null {
+export function createAudioDirector(
+  onContextStateChange?: (
+    state: RuntimeAudioContextState,
+  ) => void,
+): AudioDirector | null {
   if (typeof window === "undefined") {
     return null;
   }
+  configurePlaybackAudioSession();
   const AudioContextConstructor =
     window.AudioContext ??
     (
@@ -1472,7 +1678,10 @@ export function createAudioDirector(): AudioDirector | null {
   if (!AudioContextConstructor) {
     return null;
   }
-  return new AudioDirector(new AudioContextConstructor());
+  return new AudioDirector(
+    new AudioContextConstructor(),
+    onContextStateChange,
+  );
 }
 
 export function damageBucket(amount: number, maxHealth: number): DamageBucket {

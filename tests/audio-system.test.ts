@@ -8,6 +8,7 @@ import {
 } from "../lib/game";
 import {
   AUDIO_PREFERENCES_STORAGE_KEY,
+  AudioActivationError,
   AudioDirector,
   CANONICAL_SOUND_PROFILES,
   DEFAULT_AUDIO_PREFERENCES,
@@ -15,12 +16,14 @@ import {
   MUSIC_TEMPO_BPM,
   SOUND_PROFILES,
   audioPlanForEvent,
+  configurePlaybackAudioSession,
   damageBucket,
   loadAudioPreferences,
   normalizeAudioPreferences,
   saveAudioPreferences,
   type AudioPreferences,
   type GameAudioEvent,
+  type RuntimeAudioContextState,
 } from "../app/game/audio-system";
 
 const enabled: AudioPreferences = {
@@ -347,6 +350,15 @@ class FakeOscillator extends FakeNode {
   public stop(): void {}
 }
 
+class FakeBufferSource extends FakeNode {
+  public buffer: AudioBuffer | null = null;
+  public onended: (() => void) | null = null;
+
+  public start(): void {
+    this.onended?.();
+  }
+}
+
 class FakeGain extends FakeNode {
   public readonly gain = new FakeAudioParam();
 }
@@ -364,9 +376,31 @@ class FakePanner extends FakeNode {
 }
 
 class FakeAudioContext {
-  public currentTime = 0;
-  public state: AudioContextState = "suspended";
+  public state: RuntimeAudioContextState;
+  public readonly sampleRate = 48_000;
   public readonly destination = new FakeNode();
+  private stateChangeListener: (() => void) | null = null;
+  private runningSince = 0;
+
+  public constructor(
+    state: RuntimeAudioContextState = "suspended",
+    private readonly resumeOutcome:
+      | "running"
+      | "frozen"
+      | "unchanged"
+      | "reject" = "running",
+  ) {
+    this.state = state;
+    if (state === "running") {
+      this.runningSince = Date.now();
+    }
+  }
+
+  public get currentTime(): number {
+    return this.state === "running" && this.resumeOutcome !== "frozen"
+      ? (Date.now() - this.runningSince) / 1_000
+      : 0;
+  }
 
   public createGain(): GainNode {
     return new FakeGain() as unknown as GainNode;
@@ -380,24 +414,129 @@ class FakeAudioContext {
   public createStereoPanner(): StereoPannerNode {
     return new FakePanner() as unknown as StereoPannerNode;
   }
+  public createBufferSource(): AudioBufferSourceNode {
+    return new FakeBufferSource() as unknown as AudioBufferSourceNode;
+  }
+  public createBuffer(): AudioBuffer {
+    return {} as AudioBuffer;
+  }
+  public addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+  ): void {
+    if (type === "statechange" && typeof listener === "function") {
+      this.stateChangeListener = listener as () => void;
+    }
+  }
+  public removeEventListener(type: string): void {
+    if (type === "statechange") {
+      this.stateChangeListener = null;
+    }
+  }
   public async resume(): Promise<void> {
-    this.state = "running";
+    if (this.resumeOutcome === "reject") {
+      throw new Error("resume rejected");
+    }
+    if (
+      this.resumeOutcome === "running" ||
+      this.resumeOutcome === "frozen"
+    ) {
+      this.state = "running";
+      this.runningSince = Date.now();
+      this.stateChangeListener?.();
+    }
   }
   public async suspend(): Promise<void> {
     this.state = "suspended";
+    this.stateChangeListener?.();
   }
   public async close(): Promise<void> {
     this.state = "closed";
+    this.stateChangeListener?.();
   }
 }
 
 describe("AudioDirector lifecycle and budgets", () => {
+  it("requests the playback audio session when Safari exposes AudioSession", () => {
+    const audioSession = { type: "auto", state: "inactive" };
+    expect(
+      configurePlaybackAudioSession({ audioSession }),
+    ).toBe("playback");
+    expect(audioSession.type).toBe("playback");
+    expect(configurePlaybackAudioSession({})).toBeNull();
+  });
+
+  it.each(["suspended", "interrupted"] as const)(
+    "resumes %s contexts and confirms running before activation",
+    async (initialState) => {
+      const context = new FakeAudioContext(initialState);
+      const states: RuntimeAudioContextState[] = [];
+      const director = new AudioDirector(
+        context as unknown as AudioContext,
+        (state) => states.push(state),
+      );
+
+      const report = await director.activate(enabled);
+
+      expect(report.contextState).toBe("running");
+      expect(director.state).toBe("running");
+      expect(states).toContain("running");
+      await director.dispose();
+    },
+  );
+
+  it("rejects activation when resume rejects", async () => {
+    const context = new FakeAudioContext("suspended", "reject");
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+    );
+
+    await expect(director.activate(enabled)).rejects.toThrow(
+      "resume rejected",
+    );
+    await director.dispose();
+  });
+
+  it("rejects false-positive resume when state never becomes running", async () => {
+    const context = new FakeAudioContext("interrupted", "unchanged");
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+    );
+
+    const activation = director.activate(enabled);
+    await expect(activation).rejects.toBeInstanceOf(AudioActivationError);
+    await expect(activation).rejects.toMatchObject({
+      name: "AudioActivationError",
+      contextState: "interrupted",
+    });
+    await director.dispose();
+  });
+
+  it("rejects a running context whose clock remains frozen", async () => {
+    const context = new FakeAudioContext("suspended", "frozen");
+    const director = new AudioDirector(
+      context as unknown as AudioContext,
+    );
+
+    await expect(director.activate(enabled)).rejects.toMatchObject({
+      name: "AudioActivationError",
+      contextState: "running",
+    });
+    await director.dispose();
+  });
+
   it("caps total voices and cancels scheduled audio on pause, hide and dispose", async () => {
     const context = new FakeAudioContext();
     const director = new AudioDirector(context as unknown as AudioContext);
     await director.activate(enabled);
     expect(director.state).toBe("running");
     expect(director.activeVoiceCount).toBe(4);
+    expect(director.debugSnapshot()).toMatchObject({
+      contextState: "running",
+      activated: true,
+      musicTargetGain: 0.5,
+      sfxTargetGain: 0.7,
+    });
 
     for (let index = 0; index < 40; index += 1) {
       director.play({
