@@ -30,6 +30,11 @@ Quick Demo начинается с нулевым cash. Базовый Star Shel
 - `demoResolution` хранит provisional radius, damage, count и scale отдельно и
   не считается доказательством баланса оригинала.
 
+Selector, текущее оружие и shop показывают публичное имя как основное, но
+добавляют `classicName` вторичной строкой там, где он отличается, чтобы игрок
+мог быстро найти MIRV, Nuke, Death's Head и другие знакомые позиции без
+дублирования catalog items.
+
 В игровом adapter реализованы 17 behavior paths:
 
 - четыре размера обычного blast и три последовательных Leap Frog payload;
@@ -188,10 +193,18 @@ ammo policy.
   во время выстрела auto-follow удерживает в кадре траекторию и место
   разрешения эффекта;
 - seeded PRNG, генерация поля и баллистика воспроизводимы;
+- Quick Demo registry стратегий и чистые roller/digger/flow/cluster
+  path-builders вынесены из React adapter в `lib/game/`; Digger, Sandhog и
+  Laser передают resolver явные mechanical paths, а не ищут механику по
+  визуальному `style` сегмента;
 - траектория считается фиксированными шагами со swept collision, чтобы быстрый
   projectile не проходил сквозь тонкий слой земли;
 - React отвечает за HUD и controls, Canvas 2D — за поле, танки, projectiles и
   эффекты;
+- particle lifecycle вынесен в отдельный presentation-модуль: canonical и
+  Experimental используют общий object pool, но сохраняют раздельные caps
+  `320` и `600/250/80`; projectile trail sampling переиспользует координатный
+  scratch вместо тысяч краткоживущих объектов;
 - отдельный audio module после пользовательского действия проигрывает локальный
   CC0 action-chiptune и смешивает CC0 one-shot layers с procedural Web Audio
   signatures; все `33 + 10` items имеют typed profile, semantic archetype и

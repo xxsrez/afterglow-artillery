@@ -2,7 +2,6 @@
 
 import {
   CLASSIC_INTEREST_RATE,
-  EXPERIMENTAL_PARTICLE_CAPS,
   EXPERIMENTAL_ULTIMATES,
   MAX_INVENTORY,
   Material,
@@ -14,23 +13,33 @@ import {
   VIEWPORT_WIDTH,
   WORLD_WIDTH,
   DEFAULT_DEMO_MATCH_MODE,
+  DEMO_BEHAVIORS,
   airburstImpactPlan,
   airburstPayloadProfile,
   availableSelectedWeapon,
   applyInterest,
+  buildDiggerPath,
+  buildFlowPoints,
+  buildFunkyChain,
+  buildRollPath,
+  buildUndergroundFan,
   calculateInterest,
   consumePlayerWeapon,
   createDemoInventory,
   generateBattlefield,
+  getDemoBehavior,
   getShield,
   getExperimentalUltimate,
+  getWeapon,
   getWeaponEffectProfile,
   isExperimentalUltimateId,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   leapFrogImpactPlan,
   leapFrogImpactProfiles,
+  linePath,
   nextPlayerIndex,
+  pointAlongPathInto,
   purchaseWeapon,
   quoteWeaponPurchase,
   quoteWeaponSale,
@@ -41,10 +50,14 @@ import {
   resolveShieldDeflection,
   selectPlayerWeapon,
   sellWeapon,
+  samplePath,
   shouldOpenInterroundShop,
   shieldCapacity,
   simulateTrajectory,
+  terrainSurfaceOrFloor,
+  trajectoryApexIndex,
   updatePlayerAim,
+  type DemoBehaviorKind,
   type DemoMatchMode,
   type BattlefieldSpawn,
   type ExperimentalResolutionResult,
@@ -58,7 +71,6 @@ import {
   type TrajectoryPoint,
   type Vector2,
   type WeaponEffectProfile,
-  type WeaponFamily,
   type WeaponId,
 } from "@/lib/game";
 import {
@@ -89,6 +101,13 @@ import {
   getGameKeyboardAction,
 } from "./keyboard-controls";
 import {
+  drawParticles,
+  spawnImpactParticles,
+  updateParticles,
+  type EffectLevel,
+  type Particle,
+} from "./particle-system";
+import {
   DEFAULT_AUDIO_PREFERENCES,
   createAudioDirector,
   damageBucket,
@@ -115,8 +134,8 @@ import {
   isWeaponSelectorCloseKey,
   nextWeaponFocus,
   weaponAmmoCount,
+  weaponCatalogSubtitle,
   weaponCategoryLabel,
-  weaponMechanicLabel,
   weaponsForSelectorFilter,
   type WeaponSelectorFilterId,
 } from "./weapon-selector";
@@ -125,122 +144,12 @@ import styles from "./ScorchedGame.module.css";
 const TOTAL_ROUNDS = 3;
 const MAX_TURNS_PER_ROUND = 12;
 const TANK_HALF_HEIGHT = 11;
-const MAX_ACTIVE_PARTICLES = EXPERIMENTAL_PARTICLE_CAPS.desktop;
 
 const PLAYER_COLORS = ["#d8ff45", "#ff6658"] as const;
 const PLAYER_NAMES = ["Пилот Лайм", "Пилот Коралл"] as const;
 
 const DEMO_PAYOUT_DISCLOSURE =
   "Выплаты Quick Match — демонстрационное приближение: официальные денежные коэффициенты урона, убийства и выживания неизвестны.";
-
-type DemoBehaviorKind =
-  | "blast"
-  | "leap-frog"
-  | "funky"
-  | "airburst"
-  | "napalm"
-  | "tracer"
-  | "roller"
-  | "riot-wedge"
-  | "riot-bomb"
-  | "digger"
-  | "sandhog"
-  | "dirt-sphere"
-  | "liquid-dirt"
-  | "dirt-wedge"
-  | "settle"
-  | "plasma"
-  | "laser";
-
-interface DemoBehavior {
-  readonly kind: DemoBehaviorKind;
-  readonly tier: 1 | 2 | 3 | 4;
-}
-
-/**
- * Presentation/session adapter for the catalog. Weapons that share a delivery
- * strategy stay on one generic code path; only mechanically distinct
- * families receive a separate behavior.
- */
-const DEMO_BEHAVIORS: Record<WeaponId, DemoBehavior> = {
-  babyMissile: { kind: "blast", tier: 1 },
-  missile: { kind: "blast", tier: 2 },
-  babyNuke: { kind: "blast", tier: 3 },
-  nuke: { kind: "blast", tier: 4 },
-  leapFrog: { kind: "leap-frog", tier: 3 },
-  funkyBomb: { kind: "funky", tier: 4 },
-  mirv: { kind: "airburst", tier: 2 },
-  deathsHead: { kind: "airburst", tier: 4 },
-  napalm: { kind: "napalm", tier: 2 },
-  hotNapalm: { kind: "napalm", tier: 4 },
-  tracer: { kind: "tracer", tier: 1 },
-  smokeTracer: { kind: "tracer", tier: 2 },
-  babyRoller: { kind: "roller", tier: 1 },
-  roller: { kind: "roller", tier: 2 },
-  heavyRoller: { kind: "roller", tier: 3 },
-  riotCharge: { kind: "riot-wedge", tier: 1 },
-  riotBlast: { kind: "riot-wedge", tier: 2 },
-  riotBomb: { kind: "riot-bomb", tier: 1 },
-  heavyRiotBomb: { kind: "riot-bomb", tier: 2 },
-  babyDigger: { kind: "digger", tier: 1 },
-  digger: { kind: "digger", tier: 2 },
-  heavyDigger: { kind: "digger", tier: 3 },
-  babySandhog: { kind: "sandhog", tier: 1 },
-  sandhog: { kind: "sandhog", tier: 2 },
-  heavySandhog: { kind: "sandhog", tier: 3 },
-  dirtClod: { kind: "dirt-sphere", tier: 1 },
-  dirtBall: { kind: "dirt-sphere", tier: 2 },
-  tonOfDirt: { kind: "dirt-sphere", tier: 3 },
-  liquidDirt: { kind: "liquid-dirt", tier: 2 },
-  dirtCharge: { kind: "dirt-wedge", tier: 2 },
-  earthDisrupter: { kind: "settle", tier: 1 },
-  plasmaBlast: { kind: "plasma", tier: 3 },
-  laser: { kind: "laser", tier: 2 },
-};
-
-type ArsenalFilter =
-  | "all"
-  | "heavy"
-  | "blast"
-  | "payload"
-  | "terrain-cut"
-  | "terrain-build"
-  | "energy";
-
-const ARSENAL_FILTERS: readonly {
-  readonly id: ArsenalFilter;
-  readonly label: string;
-  readonly matches?: readonly DemoBehaviorKind[];
-  readonly families?: readonly WeaponFamily[];
-}[] = [
-  { id: "all", label: "Все 33" },
-  {
-    id: "heavy",
-    label: "Тяжёлое",
-    families: ["nuclear", "cluster"],
-  },
-  {
-    id: "blast",
-    label: "Взрывы",
-    matches: ["blast", "leap-frog", "funky", "airburst"],
-  },
-  {
-    id: "payload",
-    label: "Потоки и роллеры",
-    matches: ["napalm", "tracer", "roller"],
-  },
-  {
-    id: "terrain-cut",
-    label: "Разрушение",
-    matches: ["riot-wedge", "riot-bomb", "digger", "sandhog", "settle"],
-  },
-  {
-    id: "terrain-build",
-    label: "Грунт",
-    matches: ["dirt-sphere", "liquid-dirt", "dirt-wedge"],
-  },
-  { id: "energy", label: "Энергия", matches: ["plasma", "laser"] },
-] as const;
 
 type GamePhase =
   | "intro"
@@ -250,7 +159,6 @@ type GamePhase =
   | "shop"
   | "matchEnd";
 
-type EffectLevel = "full" | "balanced" | "reduced";
 type PlayableWeaponId = WeaponId | ExperimentalUltimateId;
 
 interface PlayerTank extends Tank {
@@ -323,6 +231,12 @@ interface FlightSegment {
   style: SegmentStyle;
 }
 
+interface ShotMechanicalPaths {
+  readonly digger: readonly Vector2[];
+  readonly sandhog: readonly (readonly Vector2[])[];
+  readonly laser: readonly Vector2[];
+}
+
 interface ShotVisual {
   weaponId: PlayableWeaponId;
   behavior: DemoBehaviorKind | "experimental";
@@ -341,27 +255,8 @@ interface ShotVisual {
   origin: Vector2;
   fizzled: boolean;
   seed: number;
+  mechanicalPaths: ShotMechanicalPaths;
   experimentalResult?: ExperimentalResolutionResult;
-}
-
-interface Particle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  age: number;
-  life: number;
-  size: number;
-  color: string;
-  drag: number;
-  gravity: number;
-  kind:
-    | "spark"
-    | "smoke"
-    | "ember"
-    | "soil"
-    | "prism"
-    | "confetti";
 }
 
 interface TerrainCache {
@@ -397,8 +292,10 @@ const lerp = (from: number, to: number, progress: number) =>
 const distance = (a: Vector2, b: Vector2) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
+const CREDITS_FORMATTER = new Intl.NumberFormat("ru-RU");
+
 const formatCredits = (credits: number) =>
-  new Intl.NumberFormat("ru-RU").format(Math.max(0, Math.round(credits)));
+  CREDITS_FORMATTER.format(Math.max(0, Math.round(credits)));
 
 function formatBlastRadius(
   blastRadius: (typeof WEAPONS)[number]["blastRadius"],
@@ -418,17 +315,9 @@ function formatBlastRadius(
   return blastRadius.join(" / ");
 }
 
-function catalogWeapon(id: WeaponId): (typeof WEAPONS)[number] {
-  const weapon = WEAPONS.find((candidate) => candidate.id === id);
-  if (!weapon) {
-    throw new Error(`Unknown weapon: ${id}`);
-  }
-  return weapon;
-}
-
 function weaponStatus(id: WeaponId): string {
-  const weapon = catalogWeapon(id);
-  const behavior = DEMO_BEHAVIORS[id].kind;
+  const weapon = getWeapon(id);
+  const behavior = getDemoBehavior(id).kind;
   const statusByBehavior: Record<DemoBehaviorKind, string> = {
     blast: "Чистая баллистическая траектория. Радиус зависит от tier.",
     "leap-frog": "Три боеголовки уйдут одна за другой.",
@@ -451,49 +340,7 @@ function weaponStatus(id: WeaponId): string {
   return `${weapon.name}: ${statusByBehavior[behavior]}`;
 }
 
-function pathPoint(path: readonly Vector2[], progress: number): Vector2 {
-  if (path.length === 0) {
-    return { x: 0, y: 0 };
-  }
-
-  if (path.length === 1) {
-    return path[0] as Vector2;
-  }
-
-  const exactIndex = clamp(progress, 0, 1) * (path.length - 1);
-  const low = Math.floor(exactIndex);
-  const high = Math.min(path.length - 1, low + 1);
-  const local = exactIndex - low;
-  const start = path[low] as Vector2;
-  const end = path[high] as Vector2;
-
-  return {
-    x: lerp(start.x, end.x, local),
-    y: lerp(start.y, end.y, local),
-  };
-}
-
-function samplePath(
-  points: readonly Vector2[],
-  maxPoints = 150,
-): readonly Vector2[] {
-  if (points.length <= maxPoints) {
-    return points;
-  }
-
-  const sampled: Vector2[] = [];
-  const stride = (points.length - 1) / (maxPoints - 1);
-
-  for (let index = 0; index < maxPoints; index += 1) {
-    sampled.push(points[Math.round(index * stride)] as Vector2);
-  }
-
-  return sampled;
-}
-
-function surfaceForTank(terrain: TerrainGrid, x: number): number {
-  return terrain.surfaceY(x) ?? terrain.height - 26;
-}
+const surfaceForTank = terrainSurfaceOrFloor;
 
 function shotCameraTarget(
   shot: ShotVisual,
@@ -682,177 +529,13 @@ function ballisticPath(
   }).points;
 }
 
-function buildRollPath(
-  terrain: TerrainGrid,
-  impact: Vector2,
-): readonly Vector2[] {
-  const leftSurface = surfaceForTank(terrain, impact.x - 8);
-  const rightSurface = surfaceForTank(terrain, impact.x + 8);
-  let direction = rightSurface >= leftSurface ? 1 : -1;
-  let x = clamp(impact.x, 3, terrain.width - 3);
-  let previousY = surfaceForTank(terrain, x) - 4;
-  const points: Vector2[] = [{ x, y: previousY }];
-
-  for (let step = 0; step < 55; step += 1) {
-    const candidateX = clamp(x + direction * 3.2, 3, terrain.width - 3);
-    const candidateY = surfaceForTank(terrain, candidateX) - 4;
-
-    if (candidateY < previousY - 7) {
-      direction = direction === 1 ? -1 : 1;
-      continue;
-    }
-
-    x = candidateX;
-    previousY = candidateY;
-    points.push({ x, y: candidateY });
-
-    const aheadY =
-      surfaceForTank(terrain, clamp(x + direction * 6, 2, terrain.width - 2)) -
-      4;
-    if (Math.abs(aheadY - candidateY) < 1 && step > 20) {
-      break;
-    }
-  }
-
-  return points;
-}
-
-function buildDiggerPath(
-  terrain: TerrainGrid,
-  impact: Vector2,
-  velocity: Vector2,
-): readonly Vector2[] {
-  const length = Math.max(1, Math.hypot(velocity.x, velocity.y));
-  const directionX = velocity.x / length;
-  const directionY = Math.max(0.35, Math.abs(velocity.y / length));
-  const points: Vector2[] = [{ ...impact }];
-  let x = impact.x;
-  let y = impact.y;
-
-  for (let step = 0; step < 62; step += 1) {
-    x = clamp(x + directionX * 2.25, 4, terrain.width - 4);
-    y = clamp(y + directionY * 2.25, 4, terrain.height - 5);
-    points.push({ x, y });
-  }
-
-  return points;
-}
-
-function buildFlowPoints(
-  terrain: TerrainGrid,
-  impact: Vector2,
-  halfWidth = 96,
-): readonly Vector2[] {
-  const points: Vector2[] = [];
-  for (let offset = -halfWidth; offset <= halfWidth; offset += 12) {
-    const x = clamp(impact.x + offset, 3, terrain.width - 3);
-    points.push({ x, y: surfaceForTank(terrain, x) - 3 });
-  }
-  return points;
-}
-
-function linePath(
-  start: Vector2,
-  end: Vector2,
-  pointCount = 48,
-): readonly Vector2[] {
-  const points: Vector2[] = [];
-  for (let index = 0; index < pointCount; index += 1) {
-    const progress = index / Math.max(1, pointCount - 1);
-    points.push({
-      x: lerp(start.x, end.x, progress),
-      y: lerp(start.y, end.y, progress),
-    });
-  }
-  return points;
-}
-
-function buildFunkyChain(
-  terrain: TerrainGrid,
-  impact: Vector2,
-  count: number,
-  seed: number,
-): readonly Vector2[] {
-  const random = new SeededRandom(`${seed}:funky:mechanics`);
-  const points: Vector2[] = [{ ...impact }];
-  const boundedCount = clamp(Math.round(count), 10, 14);
-
-  for (let index = 1; index < boundedCount; index += 1) {
-    const angle =
-      (Math.PI * 2 * index) / boundedCount + random.float(-0.5, 0.5);
-    const radius = Math.sqrt(random.float(0.05, 1)) * 76;
-    points.push({
-      x: clamp(impact.x + Math.cos(angle) * radius, 8, terrain.width - 8),
-      y: clamp(
-        impact.y + Math.sin(angle) * radius * 0.7,
-        12,
-        terrain.height - 8,
-      ),
-    });
-  }
-
-  return points;
-}
-
-function buildUndergroundFan(
-  terrain: TerrainGrid,
-  impact: Vector2,
-  count: number,
-  tier: number,
-  seed: number,
-): readonly (readonly Vector2[])[] {
-  const random = new SeededRandom(`${seed}:sandhog:mechanics`);
-  const paths: Vector2[][] = [];
-  const boundedCount = Math.max(3, Math.round(count));
-
-  for (let warhead = 0; warhead < boundedCount; warhead += 1) {
-    const fan =
-      boundedCount === 1 ? 0 : warhead / Math.max(1, boundedCount - 1) - 0.5;
-    const angle = Math.PI / 2 + fan * 1.25 + random.float(-0.08, 0.08);
-    const length = 62 + tier * 24 + random.float(-9, 14);
-    const path: Vector2[] = [];
-    for (let step = 0; step <= 34; step += 1) {
-      const progress = step / 34;
-      const curve = Math.sin(progress * Math.PI) * fan * 18;
-      path.push({
-        x: clamp(
-          impact.x +
-            Math.cos(angle) * length * progress +
-            curve,
-          4,
-          terrain.width - 4,
-        ),
-        y: clamp(
-          impact.y +
-            Math.sin(angle) * length * progress +
-            progress * progress * 20,
-          4,
-          terrain.height - 5,
-        ),
-      });
-    }
-    paths.push(path);
-  }
-
-  return paths;
-}
-
-function trajectoryApexIndex(
-  trajectory: readonly TrajectoryPoint[],
-): number | null {
-  const index = trajectory.findIndex(
-    (point, pointIndex) => pointIndex > 1 && point.velocityY >= 0,
-  );
-  return index > 1 && index < trajectory.length - 1 ? index : null;
-}
-
 function buildShot(
   model: GameModel,
   owner: 0 | 1,
   weaponId: WeaponId,
 ): ShotVisual {
   const tank = model.tanks[owner];
-  const weapon = catalogWeapon(weaponId);
+  const weapon = getWeapon(weaponId);
   const behavior = DEMO_BEHAVIORS[weaponId];
   const resolution = weapon.demoResolution;
   const effectProfile = getWeaponEffectProfile(weaponId);
@@ -874,6 +557,9 @@ function buildShot(
   let resolvedAt = 0.62;
   let endsAt = 0.94;
   let duration = 2_900 * durationScale;
+  let diggerPath: readonly Vector2[] = [];
+  let sandhogPaths: readonly (readonly Vector2[])[] = [];
+  let laserPath: readonly Vector2[] = [];
 
   if (behavior.kind === "blast" || behavior.kind === "riot-bomb") {
     segments.push({
@@ -1057,6 +743,7 @@ function buildShot(
       tunnelPath.length * (0.58 + behavior.tier * 0.14),
     );
     const tierPath = tunnelPath.slice(0, tierLength);
+    diggerPath = tierPath;
     segments.push(
       {
         path: basePath,
@@ -1092,6 +779,7 @@ function buildShot(
       behavior.tier,
       shotSeed,
     );
+    sandhogPaths = paths;
     paths.forEach((path, index) => {
       segments.push({
         path,
@@ -1236,7 +924,7 @@ function buildShot(
         Math.cos(radians) * tank.direction * model.terrain.width * 1.35,
       y: start.y - Math.sin(radians) * model.terrain.width * 1.35,
     };
-    const laserPath = linePath(start, end, 180);
+    laserPath = linePath(start, end, 180);
     segments.push({
       path: laserPath,
       startsAt: 0.18,
@@ -1273,6 +961,11 @@ function buildShot(
     origin,
     fizzled,
     seed: shotSeed,
+    mechanicalPaths: {
+      digger: diggerPath,
+      sandhog: sandhogPaths,
+      laser: laserPath,
+    },
   };
 }
 
@@ -1358,6 +1051,11 @@ function buildExperimentalShot(
     origin,
     fizzled: false,
     seed: shotSeed,
+    mechanicalPaths: {
+      digger: [],
+      sandhog: [],
+      laser: [],
+    },
     experimentalResult: result,
   };
 }
@@ -1731,7 +1429,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     return;
   }
 
-  const weapon = catalogWeapon(shot.weaponId);
+  const weapon = getWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const resolution = weapon.demoResolution;
   const effectProfile = getWeaponEffectProfile(shot.weaponId);
@@ -1920,15 +1618,10 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "digger") {
-    const tunnel =
-      shot.segments.find(
-        (segment) =>
-          segment.style === "digger" && segment.startsAt >= 0.38,
-      )?.path ?? [];
     includeBounds(
       editAlongPath(
         model.terrain,
-        tunnel,
+        shot.mechanicalPaths.digger,
         3 + behavior.tier * 1.6,
         "carve",
         2,
@@ -1956,21 +1649,19 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "sandhog") {
-    const undergroundPaths = shot.segments.filter(
-      (segment) => segment.style === "sandhog",
-    );
-    undergroundPaths.forEach((segment, index) => {
+    const undergroundPaths = shot.mechanicalPaths.sandhog;
+    undergroundPaths.forEach((path, index) => {
       includeBounds(
         editAlongPath(
           model.terrain,
-          segment.path,
+          path,
           2.5 + behavior.tier,
           "carve",
           2,
         ),
       );
       const endpoint =
-        segment.path[segment.path.length - 1] ?? shot.finalPoint;
+        path[path.length - 1] ?? shot.finalPoint;
       const radius = Math.max(8, resolution.radius);
       includeEdit(
         model.terrain.carveCircle(endpoint.x, endpoint.y, radius),
@@ -2078,22 +1769,20 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
   }
 
   if (behavior.kind === "laser") {
-    const laserSegment = shot.segments.find(
-      (segment) => segment.style === "laser",
-    );
-    if (laserSegment) {
+    const laserPath = shot.mechanicalPaths.laser;
+    if (laserPath.length > 0) {
       includeBounds(
         editAlongPath(
           model.terrain,
-          laserSegment.path,
+          laserPath,
           2.2,
           "carve",
           1,
         ),
       );
-      const start = laserSegment.path[0] ?? shot.origin;
+      const start = laserPath[0] ?? shot.origin;
       const end =
-        laserSegment.path[laserSegment.path.length - 1] ?? shot.finalPoint;
+        laserPath[laserPath.length - 1] ?? shot.finalPoint;
       model.tanks.forEach((tank) => {
         if (
           tank.id !== model.tanks[shot.owner].id &&
@@ -2188,7 +1877,7 @@ function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
     return `${ultimate.name}: детерминированные mechanics разрешены; декоративный aftermath не блокирует следующий ход.`;
   }
 
-  const weapon = catalogWeapon(shot.weaponId);
+  const weapon = getWeapon(shot.weaponId);
   if (shot.fizzled) {
     return withShieldEvents(
       model,
@@ -2968,7 +2657,7 @@ function segmentColor(
   if (isExperimentalUltimateId(weaponId)) {
     return getExperimentalUltimate(weaponId).accent;
   }
-  const weapon = catalogWeapon(weaponId);
+  const weapon = getWeapon(weaponId);
   switch (style) {
     case "ballistic":
     case "cluster-parent":
@@ -2994,6 +2683,8 @@ function segmentColor(
   }
 }
 
+const PROJECTILE_PATH_SCRATCH = { x: 0, y: 0 };
+
 function drawProjectile(
   context: CanvasRenderingContext2D,
   segment: FlightSegment,
@@ -3007,7 +2698,6 @@ function drawProjectile(
     0,
     1,
   );
-  const point = pathPoint(segment.path, local);
   const color =
     segment.style === "funky"
       ? `hsl(${Math.round((now * 0.035 + local * 240) % 360)} 94% 68%)`
@@ -3051,11 +2741,26 @@ function drawProjectile(
       local,
       sample / trailSamples,
     );
-    const trailPoint = pathPoint(segment.path, trailProgress);
+    if (
+      !pointAlongPathInto(
+        segment.path,
+        trailProgress,
+        PROJECTILE_PATH_SCRATCH,
+      )
+    ) {
+      PROJECTILE_PATH_SCRATCH.x = 0;
+      PROJECTILE_PATH_SCRATCH.y = 0;
+    }
     if (sample === 0) {
-      context.moveTo(trailPoint.x, trailPoint.y);
+      context.moveTo(
+        PROJECTILE_PATH_SCRATCH.x,
+        PROJECTILE_PATH_SCRATCH.y,
+      );
     } else {
-      context.lineTo(trailPoint.x, trailPoint.y);
+      context.lineTo(
+        PROJECTILE_PATH_SCRATCH.x,
+        PROJECTILE_PATH_SCRATCH.y,
+      );
     }
   }
   context.stroke();
@@ -3063,6 +2768,11 @@ function drawProjectile(
 
   context.globalAlpha = 1;
   context.fillStyle = color;
+  if (!pointAlongPathInto(segment.path, local, PROJECTILE_PATH_SCRATCH)) {
+    PROJECTILE_PATH_SCRATCH.x = 0;
+    PROJECTILE_PATH_SCRATCH.y = 0;
+  }
+  const point = PROJECTILE_PATH_SCRATCH;
 
   if (segment.style === "roller") {
     context.translate(point.x, point.y);
@@ -3266,7 +2976,7 @@ function drawImpactEnvelopes(
     return;
   }
 
-  const weapon = catalogWeapon(shot.weaponId);
+  const weapon = getWeapon(shot.weaponId);
   const sourcePoints =
     shot.impactPoints.length > 0 ? shot.impactPoints : [shot.finalPoint];
   const points = sourcePoints
@@ -3693,7 +3403,7 @@ function drawShot(
     return;
   }
 
-  const weapon = catalogWeapon(shot.weaponId);
+  const weapon = getWeapon(shot.weaponId);
   const behavior = DEMO_BEHAVIORS[shot.weaponId];
   const density =
     model.effectLevel === "full"
@@ -3743,11 +3453,14 @@ function drawShot(
   ) {
     const local = (progress - 0.42) / 0.38;
     const underground =
-      shot.segments.find(
-        (segment) =>
-          segment.style === "digger" || segment.style === "sandhog",
-      )?.path ?? [shot.finalPoint];
-    const point = pathPoint(underground, local);
+      behavior.kind === "digger"
+        ? shot.mechanicalPaths.digger
+        : (shot.mechanicalPaths.sandhog[0] ?? []);
+    if (!pointAlongPathInto(underground, local, PROJECTILE_PATH_SCRATCH)) {
+      PROJECTILE_PATH_SCRATCH.x = shot.finalPoint.x;
+      PROJECTILE_PATH_SCRATCH.y = shot.finalPoint.y;
+    }
+    const point = PROJECTILE_PATH_SCRATCH;
     context.save();
     context.strokeStyle = weapon.accent;
     context.globalAlpha = 0.3;
@@ -3937,10 +3650,10 @@ function drawShot(
   }
 
   if (behavior.kind === "laser" && progress > 0.18) {
-    const laser = shot.segments.find((segment) => segment.style === "laser");
-    if (laser) {
-      const start = laser.path[0] ?? shot.origin;
-      const end = laser.path[laser.path.length - 1] ?? shot.finalPoint;
+    const laserPath = shot.mechanicalPaths.laser;
+    if (laserPath.length > 0) {
+      const start = laserPath[0] ?? shot.origin;
+      const end = laserPath[laserPath.length - 1] ?? shot.finalPoint;
       context.save();
       const beam = context.createLinearGradient(
         start.x,
@@ -4038,271 +3751,6 @@ function drawShot(
     context.restore();
   }
 
-}
-
-function updateParticles(
-  particles: Particle[],
-  deltaSeconds: number,
-  pool: Particle[],
-): void {
-  for (const particle of particles) {
-    particle.age += deltaSeconds;
-    particle.vx *= Math.pow(particle.drag, deltaSeconds * 60);
-    particle.vy =
-      particle.vy * Math.pow(particle.drag, deltaSeconds * 60) +
-      particle.gravity * deltaSeconds;
-    particle.x += particle.vx * deltaSeconds;
-    particle.y += particle.vy * deltaSeconds;
-  }
-
-  let writeIndex = 0;
-  for (const particle of particles) {
-    if (particle.age < particle.life) {
-      particles[writeIndex] = particle;
-      writeIndex += 1;
-    } else if (pool.length < MAX_ACTIVE_PARTICLES) {
-      pool.push(particle);
-    }
-  }
-  particles.length = writeIndex;
-}
-
-function drawParticles(
-  context: CanvasRenderingContext2D,
-  particles: readonly Particle[],
-): void {
-  context.save();
-  context.globalCompositeOperation = "lighter";
-  for (const particle of particles) {
-    const life = clamp(1 - particle.age / particle.life, 0, 1);
-    context.globalAlpha = life * (particle.kind === "smoke" ? 0.28 : 0.85);
-    context.fillStyle = particle.color;
-
-    if (particle.kind === "prism" || particle.kind === "confetti") {
-      context.save();
-      context.translate(particle.x, particle.y);
-      context.rotate(particle.age * (particle.kind === "confetti" ? 7 : 4));
-      context.fillRect(
-        -particle.size / 2,
-        -particle.size * (particle.kind === "confetti" ? 0.28 : 0.5),
-        particle.size,
-        particle.size * (particle.kind === "confetti" ? 0.56 : 1),
-      );
-      context.restore();
-    } else {
-      context.beginPath();
-      context.arc(
-        particle.x,
-        particle.y,
-        particle.size * (particle.kind === "smoke" ? 1.25 - life * 0.25 : life),
-        0,
-        Math.PI * 2,
-      );
-      context.fill();
-    }
-  }
-  context.restore();
-}
-
-function spawnImpactParticles(
-  particles: Particle[],
-  shot: ShotVisual,
-  effectLevel: EffectLevel,
-  pool: Particle[],
-  phone: boolean,
-): void {
-  const random = new SeededRandom(`${shot.seed}:presentation`);
-  if (isExperimentalUltimateId(shot.weaponId)) {
-    const definition = getExperimentalUltimate(shot.weaponId);
-    const hardCap =
-      effectLevel === "reduced"
-        ? EXPERIMENTAL_PARTICLE_CAPS.reduced
-        : phone
-          ? EXPERIMENTAL_PARTICLE_CAPS.phone
-          : EXPERIMENTAL_PARTICLE_CAPS.desktop;
-    const requestedBudget = definition.quality[effectLevel].particles;
-    const availableBudget = Math.max(
-      0,
-      Math.min(requestedBudget, hardCap - particles.length),
-    );
-    const centers =
-      shot.experimentalResult?.mechanicPoints.slice(0, 10) ??
-      [shot.finalPoint];
-    const colors = [
-      definition.accent,
-      definition.secondaryAccent,
-      "#fff7dc",
-    ] as const;
-    for (let index = 0; index < availableBudget; index += 1) {
-      const center =
-        centers[index % Math.max(1, centers.length)] ?? shot.finalPoint;
-      const angle =
-        definition.strategy === "top-down-column"
-          ? random.float(-Math.PI * 0.72, -Math.PI * 0.28)
-          : definition.strategy === "volcanic-construction"
-            ? random.float(-Math.PI * 0.92, -Math.PI * 0.08)
-            : random.float(-Math.PI, Math.PI);
-      const speed = random.float(
-        26,
-        clamp(definition.footprint.spectacleRadius * 1.35, 90, 300),
-      );
-      const particle = pool.pop() ?? {
-        x: 0,
-        y: 0,
-        vx: 0,
-        vy: 0,
-        age: 0,
-        life: 1,
-        size: 1,
-        color: definition.accent,
-        drag: 0.98,
-        gravity: 0,
-        kind: "spark" as const,
-      };
-      particle.x = center.x;
-      particle.y = center.y;
-      particle.vx = Math.cos(angle) * speed;
-      particle.vy = Math.sin(angle) * speed;
-      particle.age = 0;
-      particle.life = random.float(
-        0.8,
-        Math.min(4, definition.aftermathMs / 1_000),
-      );
-      particle.size = random.float(2, effectLevel === "full" ? 7 : 5);
-      particle.color = random.pick(colors);
-      particle.drag =
-        definition.strategy === "gravity-pulses" ? 0.965 : 0.982;
-      particle.gravity =
-        definition.strategy === "top-down-column" ? -34 : 105;
-      particle.kind =
-        definition.strategy === "rock-transmutation" ||
-        definition.strategy === "reverse-bounce-chain"
-          ? "prism"
-          : definition.strategy === "volcanic-construction"
-            ? "ember"
-            : definition.strategy === "branching-faults"
-              ? "soil"
-              : index % 7 === 0
-                ? "smoke"
-                : "spark";
-      particles.push(particle);
-    }
-    return;
-  }
-
-  const weapon = catalogWeapon(shot.weaponId);
-  const behavior = DEMO_BEHAVIORS[shot.weaponId];
-  const profile = getWeaponEffectProfile(shot.weaponId);
-  const requestedBudget = shot.fizzled
-    ? Math.min(12, profile.particleBudget[effectLevel])
-    : profile.particleBudget[effectLevel];
-  const availableBudget = Math.max(
-    0,
-    Math.min(requestedBudget, MAX_ACTIVE_PARTICLES - particles.length),
-  );
-  const funkyColors = [
-    "#ff4f81",
-    "#ffb84d",
-    "#f5ef65",
-    "#5bf28d",
-    "#5ce7ff",
-    "#8e8bff",
-    "#e66cff",
-  ] as const;
-  const colors: readonly string[] =
-    behavior.kind === "funky"
-      ? funkyColors
-      : [weapon.accent, weapon.secondaryAccent, "#fff4d6"];
-  const centers =
-    behavior.kind === "airburst" ||
-    behavior.kind === "leap-frog" ||
-    behavior.kind === "funky" ||
-    behavior.kind === "sandhog"
-      ? shot.impactPoints
-      : [shot.finalPoint];
-  let emitted = 0;
-
-  if (shot.weaponId === "smokeTracer") {
-    const trace = shot.segments[0]?.path ?? [];
-    const sampleCount = Math.min(
-      availableBudget,
-      Math.max(6, Math.round(availableBudget * 0.7)),
-    );
-    for (let index = 0; index < sampleCount; index += 1) {
-      const point = pathPoint(trace, index / Math.max(1, sampleCount - 1));
-      particles.push({
-        x: point.x,
-        y: point.y,
-        vx: random.float(-4, 4),
-        vy: random.float(-12, -3),
-        age: 0,
-        life: random.float(1.8, 3.4),
-        size: random.float(4, 9),
-        color: random.pick(colors),
-        drag: 0.985,
-        gravity: -4,
-        kind: "smoke",
-      });
-      emitted += 1;
-    }
-  }
-
-  centers.forEach((center) => {
-    const remaining = Math.max(0, availableBudget - emitted);
-    const count = Math.min(
-      remaining,
-      Math.max(1, Math.ceil(remaining / Math.max(1, centers.length))),
-    );
-    for (let index = 0; index < count; index += 1) {
-      const angle = random.float(-Math.PI, 0);
-      const speed = random.float(
-        35,
-        clamp(profile.spectacleRadius * 1.8, 120, 360),
-      );
-      const kind: Particle["kind"] =
-        behavior.kind === "funky"
-          ? index % 3 === 0
-            ? "confetti"
-            : "prism"
-          : behavior.kind === "airburst"
-          ? "prism"
-          : behavior.kind === "napalm"
-            ? "ember"
-            : behavior.kind === "dirt-sphere" ||
-                behavior.kind === "liquid-dirt" ||
-                behavior.kind === "dirt-wedge" ||
-                behavior.kind === "digger" ||
-                behavior.kind === "sandhog"
-              ? "soil"
-              : index % 5 === 0
-                ? "smoke"
-                : "spark";
-      particles.push({
-        x: center.x,
-        y: center.y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        age: 0,
-        life: random.float(
-          0.55,
-          Math.max(0.9, profile.aftermathMs / 1_000),
-        ),
-        size: random.float(
-          2,
-          kind === "smoke"
-            ? 10
-            : profile.signature === "nuclear"
-              ? 7
-              : 5,
-        ),
-        color: random.pick(colors),
-        drag: kind === "smoke" ? 0.97 : 0.985,
-        gravity: kind === "smoke" ? -8 : 190,
-        kind,
-      });
-      emitted += 1;
-    }
-  });
 }
 
 function playerStyle(color: string): CSSProperties {
@@ -4408,7 +3856,7 @@ export default function ScorchedGame() {
   >({});
   const [, setRevision] = useState(0);
   const [arsenalFilter, setArsenalFilter] =
-    useState<ArsenalFilter>("all");
+    useState<WeaponSelectorFilterId>("all");
   const [weaponSelectorFilter, setWeaponSelectorFilter] =
     useState<WeaponSelectorFilterId>("all");
   const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
@@ -4418,7 +3866,7 @@ export default function ScorchedGame() {
   const infiniteArsenal = isInfiniteArsenalMode(model.mode);
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
-  const selectedWeaponDefinition = catalogWeapon(selectedWeapon);
+  const selectedWeaponDefinition = getWeapon(selectedWeapon);
   const selectedExperimentalDefinition =
     infiniteArsenal && activeTank.selectedExperimental
       ? getExperimentalUltimate(activeTank.selectedExperimental)
@@ -4438,7 +3886,7 @@ export default function ScorchedGame() {
         name: selectedWeaponDefinition.name,
         icon: selectedWeaponDefinition.icon,
         accent: selectedWeaponDefinition.accent,
-        role: weaponMechanicLabel(selectedWeaponDefinition),
+        role: weaponCatalogSubtitle(selectedWeaponDefinition),
         stock: infiniteArsenal
           ? "∞ showcase"
           : selectedWeaponDefinition.ammo.kind === "unlimited"
@@ -5327,7 +4775,7 @@ export default function ScorchedGame() {
       }
       const tank = game.tanks[game.activePlayer];
       if (!selectPlayerWeapon(tank, weaponId, game.mode)) {
-        game.message = `${catalogWeapon(weaponId).name}: боезапас исчерпан.`;
+        game.message = `${getWeapon(weaponId).name}: боезапас исчерпан.`;
         playUiAudio("unavailable");
         refresh();
         return;
@@ -5577,7 +5025,7 @@ export default function ScorchedGame() {
     game.message = `${tank.name} запускает «${
       isExperimentalUltimateId(weaponId)
         ? getExperimentalUltimate(weaponId).name
-        : catalogWeapon(weaponId).name
+        : getWeapon(weaponId).name
     }».`;
     refresh();
 
@@ -5780,7 +5228,7 @@ export default function ScorchedGame() {
             : result.reason === "insufficient-credits"
               ? "недостаточно средств"
               : "базовый снаряд уже бесконечен";
-        game.message = `${catalogWeapon(weaponId).name}: ${reason}.`;
+        game.message = `${getWeapon(weaponId).name}: ${reason}.`;
         playUiAudio("unavailable");
         refresh();
         return;
@@ -5788,7 +5236,7 @@ export default function ScorchedGame() {
       tank.credits = result.credits;
       tank.inventory = result.inventory;
       game.message =
-        `${tank.name}: «${catalogWeapon(weaponId).name}» +${result.quote.quantity} ` +
+        `${tank.name}: «${getWeapon(weaponId).name}» +${result.quote.quantity} ` +
         `за ₡ ${formatCredits(result.spent)}${result.quote.isPartialBundle ? " (частичный bundle, +20%)" : ""}.`;
       playUiAudio("purchase");
       refresh();
@@ -5813,7 +5261,7 @@ export default function ScorchedGame() {
         game.message =
           result.reason === "no-inventory" ||
           result.reason === "insufficient-inventory"
-            ? `${catalogWeapon(weaponId).name}: нечего продавать.`
+            ? `${getWeapon(weaponId).name}: нечего продавать.`
             : "Бесконечную Baby Missile нельзя продать.";
         playUiAudio("unavailable");
         refresh();
@@ -5822,7 +5270,7 @@ export default function ScorchedGame() {
       tank.inventory = result.inventory;
       tank.credits = result.credits;
       game.message =
-        `${tank.name}: продана 1 ед. «${catalogWeapon(weaponId).name}» ` +
+        `${tank.name}: продана 1 ед. «${getWeapon(weaponId).name}» ` +
         `за ₡ ${formatCredits(result.earned)} (demo sell-back 60%).`;
       playUiAudio("sale");
       refresh();
@@ -5987,18 +5435,7 @@ export default function ScorchedGame() {
         ? model.tanks[0]
         : model.tanks[1];
   const shopTank = model.tanks[model.shopPlayer];
-  const activeFilterDefinition =
-    ARSENAL_FILTERS.find((filter) => filter.id === arsenalFilter) ??
-    ARSENAL_FILTERS[0];
-  const filteredWeapons = WEAPONS.filter(
-    (weapon) =>
-      activeFilterDefinition?.id === "all" ||
-      (activeFilterDefinition?.families?.includes(weapon.family) ?? false) ||
-      (activeFilterDefinition?.matches?.includes(
-        DEMO_BEHAVIORS[weapon.id].kind,
-      ) ??
-        false),
-  );
+  const filteredWeapons = weaponsForSelectorFilter(arsenalFilter);
   const eligibleInterestBank = shopTank.credits;
   const interestPreview = calculateInterest(eligibleInterestBank);
   const audioSettings = (
@@ -6463,7 +5900,7 @@ export default function ScorchedGame() {
               className={styles.fireButton}
               onClick={() => void fire()}
               disabled={controlsLocked}
-              aria-label={`Огонь: ${selectedPlayable.name}`}
+              aria-label={`Огонь: ${selectedPlayable.name}, ${selectedPlayable.role}`}
             >
               Огонь
             </button>
@@ -6549,7 +5986,7 @@ export default function ScorchedGame() {
             onKeyDown={handleWeaponGridKeyDown}
           >
             {selectorWeapons.map((weapon) => {
-              const mechanicLabel = weaponMechanicLabel(weapon);
+              const catalogSubtitle = weaponCatalogSubtitle(weapon);
               const ammo = weaponAmmo(activeTank, weapon.id);
               const available = canUseWeapon(
                 model,
@@ -6586,10 +6023,10 @@ export default function ScorchedGame() {
                   style={weaponStyle(weapon.accent)}
                   aria-selected={selected}
                   aria-disabled={!available}
-                  aria-label={`${weapon.name}, ${mechanicLabel}, ${weaponCategoryLabel(
+                  aria-label={`${weapon.name}, ${catalogSubtitle}, ${weaponCategoryLabel(
                     weapon.category,
                   )}, ${accessibleStatus}`}
-                  title={`${mechanicLabel}. ${weapon.description}`}
+                  title={`${catalogSubtitle}. ${weapon.description}`}
                   onClick={() => {
                     if (available) {
                       selectWeaponFromSelector(weapon.id);
@@ -6605,7 +6042,7 @@ export default function ScorchedGame() {
                     </span>
                     <span className={styles.weaponOptionTitle}>
                       <strong>{weapon.shortName}</strong>
-                      <span>{mechanicLabel}</span>
+                      <span>{catalogSubtitle}</span>
                     </span>
                   </span>
                   <span className={styles.weaponOptionDescription}>
@@ -7024,7 +6461,9 @@ export default function ScorchedGame() {
               role="tablist"
               aria-label="Фильтр арсенала"
             >
-              {ARSENAL_FILTERS.map((filter) => (
+              {WEAPON_SELECTOR_FILTERS.filter(
+                (filter) => filter.id !== "experimental",
+              ).map((filter) => (
                 <button
                   type="button"
                   key={filter.id}
@@ -7091,7 +6530,7 @@ export default function ScorchedGame() {
                           {weapon.name}
                         </span>
                         <span className={styles.shopCardFamily}>
-                          {weaponMechanicLabel(weapon)}
+                          {weaponCatalogSubtitle(weapon)}
                         </span>
                       </span>
                     </div>

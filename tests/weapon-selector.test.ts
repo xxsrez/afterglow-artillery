@@ -6,6 +6,8 @@ import {
   isWeaponSelectable,
   nextWeaponFocus,
   weaponAmmoCount,
+  weaponCatalogSubtitle,
+  weaponClassicAlias,
   weaponMechanicLabel,
   weaponsForSelectorFilter,
 } from "../app/game/weapon-selector";
@@ -45,7 +47,22 @@ describe("weapon selector", () => {
     ]);
   });
 
-  it("describes heavy mechanics without exposing classic catalog labels", () => {
+  it("keeps classic aliases discoverable without replacing public names", () => {
+    expect(weaponClassicAlias(getWeapon("mirv"))).toBe("MIRV");
+    expect(weaponClassicAlias(getWeapon("nuke"))).toBe("Nuke");
+    expect(weaponClassicAlias(getWeapon("funkyBomb"))).toBeNull();
+    expect(weaponCatalogSubtitle(getWeapon("mirv"))).toBe(
+      "MIRV · Раскрытие в апогее ×5",
+    );
+    expect(weaponCatalogSubtitle(getWeapon("nuke"))).toBe(
+      "Nuke · Большой ядерный заряд",
+    );
+    expect(weaponCatalogSubtitle(getWeapon("funkyBomb"))).toBe(
+      "Цепь 10–14 взрывов (demo)",
+    );
+  });
+
+  it("describes heavy mechanics with explicit payload roles", () => {
     expect(weaponMechanicLabel(getWeapon("babyNuke"))).toBe(
       "Малый ядерный заряд",
     );

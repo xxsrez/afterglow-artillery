@@ -1,4 +1,6 @@
-import type { Vector2 } from "@/lib/game";
+import { pointAlongPath, type Vector2 } from "../../lib/game";
+
+export { pointAlongPath };
 
 export const MIN_CAMERA_ZOOM = 0.72;
 export const MAX_CAMERA_ZOOM = 1.55;
@@ -254,31 +256,6 @@ export function moveCameraToward(
     viewport,
     world,
   );
-}
-
-export function pointAlongPath(
-  path: readonly Vector2[],
-  progress: number,
-): Vector2 | null {
-  if (path.length === 0) {
-    return null;
-  }
-
-  if (path.length === 1) {
-    return { ...(path[0] as Vector2) };
-  }
-
-  const exactIndex = clamp(progress, 0, 1) * (path.length - 1);
-  const low = Math.floor(exactIndex);
-  const high = Math.min(path.length - 1, low + 1);
-  const local = exactIndex - low;
-  const start = path[low] as Vector2;
-  const end = path[high] as Vector2;
-
-  return {
-    x: start.x + (end.x - start.x) * local,
-    y: start.y + (end.y - start.y) * local,
-  };
 }
 
 export function averagePoints(

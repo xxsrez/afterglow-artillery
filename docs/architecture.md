@@ -70,7 +70,9 @@ flowchart LR
 
 Чистые TypeScript-типы для match, round, tank, inventory, economy, weapon,
 projectile, material и damage. Domain не импортирует React, DOM, AudioContext
-или storage.
+или storage. Quick Demo registry стратегий и детерминированные построители
+roller/digger/flow/cluster paths находятся здесь же: их результат участвует
+в разрешении выстрела и поэтому не должен зависеть от React-компонента.
 
 ### Application/session
 
@@ -82,7 +84,9 @@ projectile, material и damage. Domain не импортирует React, DOM, A
 
 Фиксированный шаг, баллистика, collision queries, payload graph, damage,
 shields, материал, падение и стабилизация. Случайность поступает только из
-seeded PRNG.
+seeded PRNG. Mechanical paths Digger, Sandhog и Laser хранятся в плане
+выстрела явно; resolver не восстанавливает их по визуальным `style` или
+таймингам Canvas-сегментов.
 
 ### Presentation
 
@@ -97,6 +101,12 @@ graph, ducking, compressor и lifecycle. Локальный action-chiptune ид
 one-shots различают семантический класс и масштаб воздействия. Procedural
 voices сохраняют weapon signature и fallback при недоступном sample. Domain не
 знает о файлах, лицензиях, громкости или доступности browser audio.
+
+Particle subsystem также отделён от React adapter. Все семейства используют
+один object pool, но canonical Quick Demo и Experimental применяют собственные
+active caps. Интерполяция projectile trails в горячем цикле пишет координаты
+в переиспользуемый scratch-объект вместо создания временного `Vector2` для
+каждого sample.
 
 ### UI
 
@@ -190,6 +200,9 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - отсутствие механически значимой разницы при 30, 60 и 120 Hz display;
 - верхние пределы частиц, lights, render textures и одновременных projectiles;
 - object pools для часто создаваемых presentation objects;
+- canonical active-particle cap `320` не смешивается с отдельными
+  Experimental caps `600 desktop / 250 phone / 80 Reduced`;
+- trail sampling не создаёт временный объект на каждую точку каждого кадра;
 - adaptive resolution/effect density без изменения logical world.
 
 Измерять нужно p50/p95 frame time, main-thread long tasks, draw calls,

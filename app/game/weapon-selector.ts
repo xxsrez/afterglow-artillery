@@ -66,6 +66,10 @@ export function weaponCategoryLabel(category: WeaponCategory): string {
   return CATEGORY_LABELS[category];
 }
 
+export function weaponClassicAlias(weapon: WeaponDefinition): string | null {
+  return weapon.classicName === weapon.name ? null : weapon.classicName;
+}
+
 /**
  * Коротко объясняет механику публичными названиями проекта. Classic catalog
  * labels намеренно не используются: это presentation copy, а не справочник.
@@ -128,6 +132,12 @@ export function weaponMechanicLabel(weapon: WeaponDefinition): string {
           return "Одиночный взрыв";
       }
   }
+}
+
+export function weaponCatalogSubtitle(weapon: WeaponDefinition): string {
+  const classicAlias = weaponClassicAlias(weapon);
+  const mechanicLabel = weaponMechanicLabel(weapon);
+  return classicAlias ? `${classicAlias} · ${mechanicLabel}` : mechanicLabel;
 }
 
 export function weaponsForSelectorFilter(
