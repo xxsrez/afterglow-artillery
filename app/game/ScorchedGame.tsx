@@ -67,6 +67,19 @@ import {
   getGameKeyboardAction,
 } from "./keyboard-controls";
 import {
+  DEFAULT_AUDIO_PREFERENCES,
+  createAudioDirector,
+  damageBucket,
+  loadAudioPreferences,
+  saveAudioPreferences,
+  type AudioDirector,
+  type AudioMaterial,
+  type AudioPreferences,
+  type GameAudioEvent,
+  type MusicState,
+  type UiAudioCue,
+} from "./audio-system";
+import {
   scheduleSelectorFocus,
   type SelectorCloseOutcome,
 } from "./selector-focus";
@@ -245,7 +258,8 @@ interface GameModel {
   lastRoundWasDraw: boolean;
   shieldEvents: ShieldMatchEvent[];
   paused: boolean;
-  audioEnabled: boolean;
+  audio: AudioPreferences;
+  audioAvailable: boolean;
   reducedMotion: boolean;
   effectLevel: EffectLevel;
   message: string;
@@ -320,11 +334,6 @@ interface Particle {
 interface TerrainCache {
   canvas: HTMLCanvasElement;
   revision: number;
-}
-
-interface AudioEngine {
-  context: AudioContext;
-  master: GainNode;
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -507,7 +516,8 @@ function createGame(seed = 41_705): GameModel {
     lastRoundWasDraw: false,
     shieldEvents: [],
     paused: false,
-    audioEnabled: true,
+    audio: { ...DEFAULT_AUDIO_PREFERENCES },
+    audioAvailable: true,
     reducedMotion: false,
     effectLevel: "full",
     message: "Настройте угол и силу. Первый выстрел за пилотом Лайм.",
@@ -3748,195 +3758,6 @@ function spawnImpactParticles(
   });
 }
 
-function makeAudioEngine(): AudioEngine | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const AudioContextConstructor =
-    window.AudioContext ??
-    (
-      window as typeof window & {
-        webkitAudioContext?: typeof AudioContext;
-      }
-    ).webkitAudioContext;
-
-  if (!AudioContextConstructor) {
-    return null;
-  }
-
-  const context = new AudioContextConstructor();
-  const master = context.createGain();
-  master.gain.value = 0.16;
-  master.connect(context.destination);
-  return { context, master };
-}
-
-function audioTone(
-  engine: AudioEngine,
-  frequency: number,
-  duration: number,
-  type: OscillatorType,
-  sweep = 0,
-  volume = 0.35,
-  delay = 0,
-): void {
-  const start = engine.context.currentTime + delay;
-  const oscillator = engine.context.createOscillator();
-  const gain = engine.context.createGain();
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(frequency, start);
-  oscillator.frequency.exponentialRampToValueAtTime(
-    Math.max(30, frequency + sweep),
-    start + duration,
-  );
-  gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
-  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-  oscillator.connect(gain);
-  gain.connect(engine.master);
-  oscillator.start(start);
-  oscillator.stop(start + duration + 0.03);
-}
-
-function playLaunch(
-  engine: AudioEngine,
-  weaponId: PlayableWeaponId,
-): void {
-  if (isExperimentalUltimateId(weaponId)) {
-    const [low, middle, high] =
-      getExperimentalUltimate(weaponId).audioMotif;
-    audioTone(engine, low, 0.28, "sine", middle - low, 0.22);
-    audioTone(engine, middle, 0.22, "triangle", high - middle, 0.15, 0.08);
-    return;
-  }
-  const behavior = DEMO_BEHAVIORS[weaponId];
-  const tier = behavior.tier;
-  const settingsByBehavior: Record<
-    DemoBehaviorKind,
-    readonly [number, number, OscillatorType, number]
-  > = {
-    blast: [180 - tier * 12, 0.14 + tier * 0.035, "square", 230],
-    "leap-frog": [220, 0.32, "triangle", 420],
-    funky: [310, 0.36, "triangle", 720],
-    airburst: [260, 0.28, "triangle", 620],
-    napalm: [140, 0.36, "triangle", 80],
-    tracer: [520, 0.1, "sine", 320],
-    roller: [110, 0.32, "sawtooth", 180],
-    "riot-wedge": [88, 0.22, "sawtooth", -28],
-    "riot-bomb": [170, 0.15, "square", 140],
-    digger: [95, 0.4, "sawtooth", -35],
-    sandhog: [82, 0.44, "sawtooth", 54],
-    "dirt-sphere": [190, 0.3, "sine", 390],
-    "liquid-dirt": [165, 0.34, "triangle", 240],
-    "dirt-wedge": [135, 0.3, "triangle", 270],
-    settle: [120, 0.5, "sine", -35],
-    plasma: [360, 0.38, "sine", 660],
-    laser: [620, 0.28, "sawtooth", 980],
-  };
-  const [frequency, duration, type, sweep] =
-    settingsByBehavior[behavior.kind];
-  audioTone(engine, frequency, duration, type, sweep, 0.35);
-  if (
-    behavior.kind === "airburst" ||
-    behavior.kind === "funky" ||
-    behavior.kind === "dirt-sphere" ||
-    behavior.kind === "plasma"
-  ) {
-    audioTone(engine, frequency * 1.5, duration * 0.8, "sine", sweep * 0.4, 0.18, 0.05);
-  }
-}
-
-function playImpact(
-  engine: AudioEngine,
-  weaponId: PlayableWeaponId,
-): void {
-  if (isExperimentalUltimateId(weaponId)) {
-    const [low, middle, high] =
-      getExperimentalUltimate(weaponId).audioMotif;
-    audioTone(engine, low, 0.62, "sine", -low * 0.35, 0.25);
-    audioTone(engine, middle, 0.36, "triangle", high - middle, 0.16, 0.08);
-    audioTone(engine, high, 0.22, "sine", -high * 0.45, 0.12, 0.18);
-    return;
-  }
-  const behavior = DEMO_BEHAVIORS[weaponId];
-  if (behavior.kind === "airburst" || behavior.kind === "leap-frog") {
-    const count =
-      behavior.kind === "leap-frog"
-        ? 3
-        : weaponId === "deathsHead"
-          ? 9
-          : 5;
-    for (let index = 0; index < count; index += 1) {
-      audioTone(
-        engine,
-        150 + index * 18,
-        0.2,
-        "square",
-        -90,
-        0.14,
-        index * 0.055,
-      );
-    }
-    return;
-  }
-
-  if (behavior.kind === "funky") {
-    [0, 0.42, 0.84].forEach((delay, index) => {
-      audioTone(
-        engine,
-        210 + index * 170,
-        0.34,
-        index % 2 === 0 ? "triangle" : "square",
-        330,
-        0.18,
-        delay,
-      );
-    });
-    return;
-  }
-
-  if (behavior.kind === "napalm") {
-    audioTone(engine, 90, 0.7, "sawtooth", -35, 0.24);
-    audioTone(engine, 420, 0.5, "sine", -250, 0.14, 0.08);
-    return;
-  }
-
-  if (
-    behavior.kind === "dirt-sphere" ||
-    behavior.kind === "liquid-dirt" ||
-    behavior.kind === "dirt-wedge"
-  ) {
-    audioTone(engine, 130, 0.52, "sine", 440, 0.25);
-    audioTone(engine, 260, 0.48, "triangle", 510, 0.18, 0.05);
-    return;
-  }
-
-  if (behavior.kind === "tracer") {
-    audioTone(engine, 640, 0.12, "sine", -180, 0.1);
-    return;
-  }
-
-  if (behavior.kind === "laser") {
-    audioTone(engine, 840, 0.34, "sawtooth", -520, 0.22);
-    return;
-  }
-
-  if (behavior.kind === "plasma") {
-    audioTone(engine, 190, 0.56, "sine", 760, 0.28);
-    return;
-  }
-
-  const base =
-    behavior.kind === "digger" || behavior.kind === "sandhog"
-      ? 74
-      : behavior.kind === "roller"
-        ? 105
-        : 120;
-  audioTone(engine, base, 0.46, "sawtooth", -45, 0.42);
-  audioTone(engine, base * 2.8, 0.18, "square", -160, 0.13);
-}
-
 function playerStyle(color: string): CSSProperties {
   return { "--player-color": color } as CSSProperties;
 }
@@ -3949,6 +3770,53 @@ function shieldStyle(color: string): CSSProperties {
   return { "--shield-color": color } as CSSProperties;
 }
 
+function audioPanForX(x: number): number {
+  return clamp((x / WORLD_WIDTH) * 2 - 1, -1, 1);
+}
+
+function audioMaterialAtImpact(
+  game: GameModel,
+  shot: ShotVisual,
+): AudioMaterial {
+  if (shot.behavior === "napalm") {
+    return "liquid-fire";
+  }
+  const material = game.terrain.get(shot.finalPoint.x, shot.finalPoint.y);
+  if (material === Material.Rock) {
+    return "rock";
+  }
+  if (material === Material.Soil) {
+    return "soil";
+  }
+  return "air";
+}
+
+function audioMusicState(game: GameModel): MusicState {
+  switch (game.phase) {
+    case "intro":
+      return "intro";
+    case "firing":
+      return "flight";
+    case "shop":
+      return "shop";
+    case "roundEnd":
+      return "round-result";
+    case "matchEnd":
+      return "match-end";
+    case "aiming":
+      return "aiming";
+  }
+}
+
+function causesTerrainCollapse(shot: ShotVisual): boolean {
+  return (
+    shot.behavior === "settle" ||
+    shot.behavior === "digger" ||
+    shot.behavior === "sandhog" ||
+    shot.behavior === "experimental"
+  );
+}
+
 export default function ScorchedGame() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const terrainCacheRef = useRef<TerrainCache | null>(null);
@@ -3956,8 +3824,7 @@ export default function ScorchedGame() {
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const particlePoolRef = useRef<Particle[]>([]);
-  const audioRef = useRef<AudioEngine | null>(null);
-  const impactAudioPlayedRef = useRef(false);
+  const audioRef = useRef<AudioDirector | null>(null);
   const frameRef = useRef<number | null>(null);
   const lastFrameRef = useRef(0);
   const weaponDialogRef = useRef<HTMLDialogElement | null>(null);
@@ -4030,6 +3897,95 @@ export default function ScorchedGame() {
     setRevision((revision) => revision + 1);
   }, []);
 
+  const ensureAudio = useCallback(async () => {
+    const game = gameRef.current;
+    if (!game.audio.musicEnabled && !game.audio.sfxEnabled) {
+      return null;
+    }
+
+    try {
+      const audio = audioRef.current ?? createAudioDirector();
+      if (!audio) {
+        game.audioAvailable = false;
+        refresh();
+        return null;
+      }
+      audioRef.current = audio;
+      audio.updateSettings(game.audio);
+      audio.setMusicState(audioMusicState(game));
+      audio.setPaused(game.paused);
+      await audio.activate(game.audio);
+      const availabilityChanged = !game.audioAvailable;
+      game.audioAvailable = true;
+      if (availabilityChanged) {
+        refresh();
+      }
+      return audio;
+    } catch {
+      const failedAudio = audioRef.current;
+      audioRef.current = null;
+      game.audioAvailable = false;
+      void failedAudio?.dispose().catch(() => undefined);
+      refresh();
+      return null;
+    }
+  }, [refresh]);
+
+  const playAudioEvent = useCallback(
+    async (event: GameAudioEvent) => {
+      const audio = await ensureAudio();
+      if (!audio) {
+        return;
+      }
+      try {
+        audio.play(event);
+      } catch {
+        audioRef.current = null;
+        gameRef.current.audioAvailable = false;
+        void audio.dispose().catch(() => undefined);
+        refresh();
+      }
+    },
+    [ensureAudio, refresh],
+  );
+
+  const playUiAudio = useCallback(
+    (cue: UiAudioCue, pan = 0) => {
+      void playAudioEvent({
+        type: "ui",
+        cue,
+        pan,
+        seed: gameRef.current.seed + gameRef.current.turn,
+      });
+    },
+    [playAudioEvent],
+  );
+
+  const updateAudioPreferences = useCallback(
+    (update: Partial<AudioPreferences>) => {
+      const game = gameRef.current;
+      game.audio = { ...game.audio, ...update };
+      saveAudioPreferences(window.localStorage, game.audio);
+      audioRef.current?.updateSettings(game.audio);
+      refresh();
+      if (game.audio.musicEnabled || game.audio.sfxEnabled) {
+        void ensureAudio();
+      }
+    },
+    [ensureAudio, refresh],
+  );
+
+  useEffect(() => {
+    const game = gameRef.current;
+    game.audio = loadAudioPreferences(window.localStorage);
+    refresh();
+    return () => {
+      const audio = audioRef.current;
+      audioRef.current = null;
+      void audio?.dispose().catch(() => undefined);
+    };
+  }, [refresh]);
+
   const focusAfterWeaponSelectorClose = useCallback(
     (outcome: SelectorCloseOutcome) =>
       scheduleSelectorFocus(outcome, {
@@ -4049,8 +4005,9 @@ export default function ScorchedGame() {
       }
       weaponCloseOutcomeRef.current = null;
       focusAfterWeaponSelectorClose(outcome);
+      playUiAudio("selector-close");
     },
-    [focusAfterWeaponSelectorClose],
+    [focusAfterWeaponSelectorClose, playUiAudio],
   );
 
   const focusAfterShieldSelectorClose = useCallback(
@@ -4072,8 +4029,9 @@ export default function ScorchedGame() {
       }
       shieldCloseOutcomeRef.current = null;
       focusAfterShieldSelectorClose(outcome);
+      playUiAudio("selector-close");
     },
-    [focusAfterShieldSelectorClose],
+    [focusAfterShieldSelectorClose, playUiAudio],
   );
 
   const resetTransientSelectorsForTurnChange = useCallback(() => {
@@ -4103,7 +4061,8 @@ export default function ScorchedGame() {
     }
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(true);
-  }, []);
+    playUiAudio("selector-open");
+  }, [playUiAudio]);
 
   const openShieldSelector = useCallback(() => {
     const game = gameRef.current;
@@ -4120,7 +4079,8 @@ export default function ScorchedGame() {
       weaponDialogRef.current.close();
     }
     setShieldSelectorOpen(true);
-  }, []);
+    playUiAudio("selector-open");
+  }, [playUiAudio]);
 
   useEffect(() => {
     const portrait = window.matchMedia("(orientation: portrait)");
@@ -4207,31 +4167,6 @@ export default function ScorchedGame() {
     return () => cancelAnimationFrame(frame);
   }, [activeTank.shieldId, shieldSelectorOpen]);
 
-  const ensureAudio = useCallback(async () => {
-    if (!gameRef.current.audioEnabled) {
-      return null;
-    }
-
-    try {
-      const audio = audioRef.current ?? makeAudioEngine();
-      if (!audio) {
-        gameRef.current.audioEnabled = false;
-        refresh();
-        return null;
-      }
-      audioRef.current = audio;
-      if (audio.context.state === "suspended") {
-        await audio.context.resume();
-      }
-      return audio;
-    } catch {
-      audioRef.current = null;
-      gameRef.current.audioEnabled = false;
-      refresh();
-      return null;
-    }
-  }, [refresh]);
-
   const finishShot = useCallback(() => {
     const game = gameRef.current;
     const shot = shotRef.current;
@@ -4248,6 +4183,8 @@ export default function ScorchedGame() {
     game.turn += 1;
     if (somebodyDestroyed || game.turn >= MAX_TURNS_PER_ROUND) {
       completeRound(game);
+      audioRef.current?.setMusicState("round-result");
+      playUiAudio(game.lastRoundWasDraw ? "draw" : "round-end");
     } else {
       game.activePlayer = nextPlayerIndex(shot.owner);
       restoreAvailableSelectedWeapon(
@@ -4255,12 +4192,14 @@ export default function ScorchedGame() {
         game.mode,
       );
       game.phase = "aiming";
+      audioRef.current?.setMusicState("aiming");
+      playUiAudio("turn-change");
       game.message = `${outcome} ${game.tanks[game.activePlayer].name}: учитывайте ветер и след прошлого выстрела.`;
     }
 
     shotRef.current = null;
     refresh();
-  }, [refresh, resetTransientSelectorsForTurnChange]);
+  }, [playUiAudio, refresh, resetTransientSelectorsForTurnChange]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -4331,6 +4270,8 @@ export default function ScorchedGame() {
 
         if (!game.paused && !shot.resolved && progress >= shot.resolvedAt) {
           shot.resolved = true;
+          const previousHealth = game.tanks.map((tank) => tank.health);
+          const materialBeforeResolution = audioMaterialAtImpact(game, shot);
           resolveWeapon(game, shot);
           spawnImpactParticles(
             particlesRef.current,
@@ -4339,15 +4280,43 @@ export default function ScorchedGame() {
             particlePoolRef.current,
             window.matchMedia("(max-width: 900px)").matches,
           );
-          if (!impactAudioPlayedRef.current && audioRef.current) {
-            impactAudioPlayedRef.current = true;
-            try {
-              playImpact(audioRef.current, shot.weaponId);
-            } catch {
-              audioRef.current = null;
-              game.audioEnabled = false;
+          const damages = game.tanks.flatMap((tank, index) => {
+            const amount = Math.max(
+              0,
+              (previousHealth[index] ?? tank.health) - tank.health,
+            );
+            if (amount <= 0) {
+              return [];
             }
-          }
+            const direct = shot.impactPoints.some(
+              (point) =>
+                distance(point, { x: tank.x, y: tank.y - 5 }) <=
+                TANK_HALF_HEIGHT + 7,
+            );
+            return [
+              {
+                amount,
+                bucket: damageBucket(amount, tank.maxHealth),
+                direct,
+                destroyed: tank.health <= 0,
+                pan: audioPanForX(tank.x),
+              },
+            ];
+          });
+          void playAudioEvent({
+            type: "resolution",
+            weaponId: shot.weaponId,
+            material:
+              damages.some((damage) => damage.direct)
+                ? "hull"
+                : materialBeforeResolution,
+            damages,
+            shieldEvents: game.shieldEvents.map(({ event }) => event),
+            terrainCollapse: causesTerrainCollapse(shot),
+            fizzled: shot.fizzled,
+            pan: audioPanForX(shot.finalPoint.x),
+            seed: shot.seed,
+          });
           refresh();
         }
 
@@ -4367,7 +4336,7 @@ export default function ScorchedGame() {
         cancelAnimationFrame(frameRef.current);
       }
     };
-  }, [finishShot, refresh]);
+  }, [finishShot, playAudioEvent, refresh]);
 
   const adjustAngle = useCallback(
     (next: number) => {
@@ -4411,15 +4380,16 @@ export default function ScorchedGame() {
       const tank = game.tanks[game.activePlayer];
       if (!selectPlayerWeapon(tank, weaponId, game.mode)) {
         game.message = `${catalogWeapon(weaponId).name}: боезапас исчерпан.`;
+        playUiAudio("unavailable");
         refresh();
         return;
       }
       tank.selectedExperimental = null;
       game.message = weaponStatus(weaponId);
-      void ensureAudio();
+      playUiAudio("weapon-select", audioPanForX(tank.x));
       refresh();
     },
-    [ensureAudio, refresh],
+    [playUiAudio, refresh],
   );
 
   const selectWeaponFromSelector = useCallback(
@@ -4456,11 +4426,11 @@ export default function ScorchedGame() {
       game.message =
         `${ultimate.name}: Experimental Showcase, бесконечный доступ. ` +
         `${ultimate.description}`;
-      void ensureAudio();
+      playUiAudio("weapon-select", audioPanForX(tank.x));
       closeWeaponSelector("committed");
       refresh();
     },
-    [closeWeaponSelector, ensureAudio, refresh],
+    [closeWeaponSelector, playUiAudio, refresh],
   );
 
   const handleWeaponGridKeyDown = (
@@ -4538,10 +4508,11 @@ export default function ScorchedGame() {
       game.message = `${tank.name}: выбран ${shield.name}, заряд ${Math.ceil(
         tank.shield,
       )}. Выбор второго пилота останется независимым.`;
+      playUiAudio("shield-select", audioPanForX(tank.x));
       closeShieldSelector("committed");
       refresh();
     },
-    [closeShieldSelector, refresh],
+    [closeShieldSelector, playUiAudio, refresh],
   );
 
   const handleShieldGridKeyDown = (
@@ -4639,11 +4610,12 @@ export default function ScorchedGame() {
       consumePlayerWeapon(tank, weaponId, game.mode);
     }
 
-    impactAudioPlayedRef.current = false;
-    shotRef.current = isExperimentalUltimateId(weaponId)
+    const shot = isExperimentalUltimateId(weaponId)
       ? buildExperimentalShot(game, owner, weaponId)
       : buildShot(game, owner, weaponId);
+    shotRef.current = shot;
     game.phase = "firing";
+    audioRef.current?.setMusicState("flight");
     game.message = `${tank.name} запускает «${
       isExperimentalUltimateId(weaponId)
         ? getExperimentalUltimate(weaponId).name
@@ -4651,19 +4623,19 @@ export default function ScorchedGame() {
     }».`;
     refresh();
 
-    void ensureAudio().then((audio) => {
-      if (!audio) {
-        return;
-      }
-      try {
-        playLaunch(audio, weaponId);
-      } catch {
-        audioRef.current = null;
-        game.audioEnabled = false;
-        refresh();
-      }
+    void playAudioEvent({
+      type: "weapon-timeline",
+      weaponId,
+      durationMs: shot.duration,
+      resolvedAtMs: shot.resolvedAt * shot.duration,
+      impactTimesMs: shot.impactTimes.map(
+        (impactTime) => impactTime * shot.duration,
+      ),
+      fizzled: shot.fizzled,
+      pan: audioPanForX(shot.finalPoint.x),
+      seed: shot.seed,
     });
-  }, [ensureAudio, refresh]);
+  }, [playAudioEvent, refresh]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -4680,6 +4652,8 @@ export default function ScorchedGame() {
 
       if (action.type === "toggle-pause") {
         game.paused = !game.paused;
+        audioRef.current?.setPaused(game.paused);
+        playUiAudio(game.paused ? "pause" : "resume");
         refresh();
         return;
       }
@@ -4712,7 +4686,14 @@ export default function ScorchedGame() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [adjustAngle, adjustPower, cycleWeapon, fire, refresh]);
+  }, [
+    adjustAngle,
+    adjustPower,
+    cycleWeapon,
+    fire,
+    playUiAudio,
+    refresh,
+  ]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -4720,9 +4701,13 @@ export default function ScorchedGame() {
         const game = gameRef.current;
         if (game.phase === "aiming" || game.phase === "firing") {
           game.paused = true;
+          audioRef.current?.setPaused(true);
           refresh();
         }
       }
+      void audioRef.current
+        ?.setHidden(document.hidden)
+        .catch(() => undefined);
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -4749,9 +4734,10 @@ export default function ScorchedGame() {
       game.message = isInfiniteArsenalMode(mode)
         ? "Infinite Arsenal выбран: канонические 33 и отдельные Experimental 10 доступны бесконечно, магазин отключён."
         : "Quick Demo выбран: finite ammo расходуется, между раундами работает магазин.";
+      playUiAudio("mode-select");
       refresh();
     },
-    [refresh],
+    [playUiAudio, refresh],
   );
 
   const startMatch = useCallback(() => {
@@ -4761,7 +4747,14 @@ export default function ScorchedGame() {
       ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите каноническое оружие или Experimental Ultimate.`
       : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
     refresh();
-    void ensureAudio();
+    void ensureAudio().then((audio) => {
+      audio?.setMusicState("aiming");
+      audio?.play({
+        type: "ui",
+        cue: "match-start",
+        seed: game.seed,
+      });
+    });
   }, [ensureAudio, refresh]);
 
   const openRoundResult = useCallback(() => {
@@ -4769,15 +4762,21 @@ export default function ScorchedGame() {
     if (game.round >= TOTAL_ROUNDS) {
       game.phase = "matchEnd";
       game.message = "Три раунда завершены.";
+      audioRef.current?.setMusicState("match-end");
+      playUiAudio("match-end");
     } else if (shouldOpenInterroundShop(game.mode)) {
       game.phase = "shop";
       game.shopPlayer = 0;
       game.message = `${game.tanks[0].name}: выберите покупки на следующий раунд.`;
+      audioRef.current?.setMusicState("shop");
+      playUiAudio("shop-open");
     } else {
       prepareNextRound(game);
+      audioRef.current?.setMusicState("aiming");
+      playUiAudio("round-start");
     }
     refresh();
-  }, [refresh]);
+  }, [playUiAudio, refresh]);
 
   const buyWeapon = useCallback(
     (weaponId: WeaponId) => {
@@ -4799,6 +4798,7 @@ export default function ScorchedGame() {
               ? "недостаточно средств"
               : "базовый снаряд уже бесконечен";
         game.message = `${catalogWeapon(weaponId).name}: ${reason}.`;
+        playUiAudio("unavailable");
         refresh();
         return;
       }
@@ -4807,20 +4807,10 @@ export default function ScorchedGame() {
       game.message =
         `${tank.name}: «${catalogWeapon(weaponId).name}» +${result.quote.quantity} ` +
         `за ₡ ${formatCredits(result.spent)}${result.quote.isPartialBundle ? " (частичный bundle, +20%)" : ""}.`;
-      void ensureAudio().then((audio) => {
-        if (audio) {
-          try {
-            audioTone(audio, 260, 0.12, "sine", 320, 0.18);
-          } catch {
-            audioRef.current = null;
-            game.audioEnabled = false;
-            refresh();
-          }
-        }
-      });
+      playUiAudio("purchase");
       refresh();
     },
-    [ensureAudio, refresh],
+    [playUiAudio, refresh],
   );
 
   const sellOneWeapon = useCallback(
@@ -4842,6 +4832,7 @@ export default function ScorchedGame() {
           result.reason === "insufficient-inventory"
             ? `${catalogWeapon(weaponId).name}: нечего продавать.`
             : "Бесконечную Baby Missile нельзя продать.";
+        playUiAudio("unavailable");
         refresh();
         return;
       }
@@ -4850,20 +4841,10 @@ export default function ScorchedGame() {
       game.message =
         `${tank.name}: продана 1 ед. «${catalogWeapon(weaponId).name}» ` +
         `за ₡ ${formatCredits(result.earned)} (demo sell-back 60%).`;
-      void ensureAudio().then((audio) => {
-        if (audio) {
-          try {
-            audioTone(audio, 330, 0.12, "triangle", -120, 0.14);
-          } catch {
-            audioRef.current = null;
-            game.audioEnabled = false;
-            refresh();
-          }
-        }
-      });
+      playUiAudio("sale");
       refresh();
     },
-    [ensureAudio, refresh],
+    [playUiAudio, refresh],
   );
 
   const buyUpgrade = useCallback(
@@ -4879,6 +4860,7 @@ export default function ScorchedGame() {
           ? tank.bonusHealth >= 40
           : tank.reserveShield >= 60;
       if (tank.credits < price || upgradeAtCap) {
+        playUiAudio("unavailable");
         return;
       }
       tank.credits -= price;
@@ -4889,27 +4871,10 @@ export default function ScorchedGame() {
         tank.reserveShield = Math.min(60, tank.reserveShield + 25);
         game.message = `${tank.name}: щит +25 на следующий раунд.`;
       }
-      void ensureAudio().then((audio) => {
-        if (audio) {
-          try {
-            audioTone(
-              audio,
-              kind === "health" ? 180 : 360,
-              0.16,
-              "triangle",
-              260,
-              0.18,
-            );
-          } catch {
-            audioRef.current = null;
-            game.audioEnabled = false;
-            refresh();
-          }
-        }
-      });
+      playUiAudio("upgrade");
       refresh();
     },
-    [ensureAudio, refresh],
+    [playUiAudio, refresh],
   );
 
   const finishShopping = useCallback(() => {
@@ -4920,11 +4885,14 @@ export default function ScorchedGame() {
     if (game.shopPlayer === 0) {
       game.shopPlayer = 1;
       game.message = `${game.tanks[1].name}: теперь ваши покупки.`;
+      playUiAudio("turn-change");
     } else {
       prepareNextRound(game);
+      audioRef.current?.setMusicState("aiming");
+      playUiAudio("round-start");
     }
     refresh();
-  }, [refresh]);
+  }, [playUiAudio, refresh]);
 
   const togglePause = useCallback(() => {
     const game = gameRef.current;
@@ -4936,16 +4904,19 @@ export default function ScorchedGame() {
       return;
     }
     game.paused = !game.paused;
+    audioRef.current?.setPaused(game.paused);
+    playUiAudio(game.paused ? "pause" : "resume");
     if (!game.paused) {
       void ensureAudio();
     }
     refresh();
-  }, [ensureAudio, refresh]);
+  }, [ensureAudio, playUiAudio, refresh]);
 
   const resetGame = useCallback(() => {
     const previous = gameRef.current;
     gameRef.current = createGame(previous.seed + 1);
-    gameRef.current.audioEnabled = previous.audioEnabled;
+    gameRef.current.audio = previous.audio;
+    gameRef.current.audioAvailable = previous.audioAvailable;
     gameRef.current.reducedMotion = previous.reducedMotion;
     gameRef.current.effectLevel = previous.effectLevel;
     shotRef.current = null;
@@ -4956,17 +4927,33 @@ export default function ScorchedGame() {
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(false);
     setShieldSelectorOpen(false);
+    audioRef.current?.cancelAll();
+    audioRef.current?.setPaused(false);
+    audioRef.current?.setMusicState("intro");
+    playUiAudio("toggle");
     refresh();
-  }, [refresh]);
+  }, [playUiAudio, refresh]);
 
-  const toggleAudio = useCallback(() => {
+  const toggleMusic = useCallback(() => {
     const game = gameRef.current;
-    game.audioEnabled = !game.audioEnabled;
-    if (game.audioEnabled) {
-      void ensureAudio();
-    } else if (audioRef.current) {
-      void audioRef.current.context.suspend().catch(() => undefined);
+    updateAudioPreferences({
+      musicEnabled: !game.audio.musicEnabled,
+    });
+    playUiAudio("toggle");
+  }, [playUiAudio, updateAudioPreferences]);
+
+  const toggleSfx = useCallback(() => {
+    const game = gameRef.current;
+    const sfxEnabled = !game.audio.sfxEnabled;
+    updateAudioPreferences({ sfxEnabled });
+    if (sfxEnabled) {
+      playUiAudio("toggle");
     }
+  }, [playUiAudio, updateAudioPreferences]);
+
+  const retryAudio = useCallback(() => {
+    gameRef.current.audioAvailable = true;
+    void ensureAudio();
     refresh();
   }, [ensureAudio, refresh]);
 
@@ -5009,6 +4996,81 @@ export default function ScorchedGame() {
   );
   const eligibleInterestBank = shopTank.credits;
   const interestPreview = calculateInterest(eligibleInterestBank);
+  const audioSettings = (
+    <div className={styles.audioSettings} aria-label="Настройки аудио">
+      <div className={styles.audioToggleRow}>
+        <button
+          type="button"
+          className={styles.toggleButton}
+          aria-pressed={model.audio.musicEnabled}
+          onClick={toggleMusic}
+        >
+          <span>Музыка</span>
+          <span className={styles.toggleState}>
+            {model.audio.musicEnabled ? "Вкл" : "Выкл"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles.toggleButton}
+          aria-pressed={model.audio.sfxEnabled}
+          onClick={toggleSfx}
+        >
+          <span>Звуки</span>
+          <span className={styles.toggleState}>
+            {model.audio.sfxEnabled ? "Вкл" : "Выкл"}
+          </span>
+        </button>
+      </div>
+      <label className={styles.audioVolume}>
+        <span>
+          Громкость музыки
+          <strong>{model.audio.musicVolume}%</strong>
+        </span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={model.audio.musicVolume}
+          onChange={(event) =>
+            updateAudioPreferences({
+              musicVolume: Number(event.target.value),
+            })
+          }
+          aria-label="Громкость музыки"
+        />
+      </label>
+      <label className={styles.audioVolume}>
+        <span>
+          Громкость звуков
+          <strong>{model.audio.sfxVolume}%</strong>
+        </span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={model.audio.sfxVolume}
+          onChange={(event) =>
+            updateAudioPreferences({
+              sfxVolume: Number(event.target.value),
+            })
+          }
+          aria-label="Громкость звуков"
+        />
+      </label>
+      {!model.audioAvailable && (
+        <button
+          type="button"
+          className={styles.audioUnavailable}
+          onClick={retryAudio}
+        >
+          Аудио недоступно в браузере — повторить подключение
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className={styles.game}>
@@ -5306,6 +5368,7 @@ export default function ScorchedGame() {
           weaponCloseOutcomeRef.current = null;
           if (outcome) {
             focusAfterWeaponSelectorClose(outcome);
+            playUiAudio("selector-close");
           }
         }}
       >
@@ -5518,6 +5581,7 @@ export default function ScorchedGame() {
           shieldCloseOutcomeRef.current = null;
           if (outcome) {
             focusAfterShieldSelectorClose(outcome);
+            playUiAudio("selector-close");
           }
         }}
       >
@@ -5650,6 +5714,7 @@ export default function ScorchedGame() {
                 </span>
               </button>
             </div>
+            {audioSettings}
             <div className={styles.modalActions}>
               <button
                 type="button"
@@ -5681,17 +5746,8 @@ export default function ScorchedGame() {
             <h2 id="pause-title" className={styles.modalTitle}>
               Пауза
             </h2>
+            {audioSettings}
             <div className={styles.toggleGrid}>
-              <button
-                type="button"
-                className={styles.toggleButton}
-                onClick={toggleAudio}
-              >
-                <span>Звук</span>
-                <span className={styles.toggleState}>
-                  {model.audioEnabled ? "Вкл" : "Выкл"}
-                </span>
-              </button>
               <button
                 type="button"
                 className={styles.toggleButton}

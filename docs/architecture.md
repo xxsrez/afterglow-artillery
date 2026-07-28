@@ -27,8 +27,8 @@
 | UI | React 19 и семантический DOM/CSS поверх canvas | крупные touch-controls, layout и доступность вне renderer |
 | Renderer | Canvas 2D | прямое обновление terrain bitmap и достаточный vertical-slice budget |
 | Симуляция | собственные pure TypeScript modules | готовая rigid-body physics не описывает пиксельный рельеф и правила оригинала |
-| Audio | Web Audio с синтезированными cues | запуск после user gesture и отсутствие внешних ассетов |
-| Хранение | состояние React в памяти | vertical slice не требует аккаунтов и persistent match |
+| Audio | typed event plans + Web Audio director | user gesture, отдельные buses, без внешних ассетов |
+| Хранение | match в памяти, audio settings в localStorage | vertical slice не требует аккаунтов |
 | Unit tests | Vitest | быстрые детерминированные тесты домена |
 | Render smoke | Node test против production worker | проверка HTML, metadata и Sites bundle |
 
@@ -88,6 +88,11 @@ seeded PRNG.
 
 Преобразует игровые события в временную шкалу sprite, particle, shader, camera
 и audio cues. Может интерполировать и ускорять показ, но не менять domain state.
+
+Audio adapter отделён от React/Canvas: чистый `audioPlanForEvent` переводит
+фактическую shot timeline и outcome в bounded voice plan, а `AudioDirector`
+владеет Web Audio graph, ducking, compressor и lifecycle. Domain не знает о
+громкости или доступности browser audio.
 
 ### UI
 
@@ -152,7 +157,8 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - При скрытии вкладки бой ставится на контролируемую паузу: браузеры обычно
   приостанавливают `requestAnimationFrame` в background.
 - Возврат не «догоняет» минуты симуляции одним кадром.
-- AudioContext активируется после явного tap/click и корректно возобновляется.
+- AudioContext активируется после явного tap/click; mute, pause, background,
+  restart и unmount отменяют pending voices и корректно возобновляют score.
 - Resize, orientation change и safe areas входят в обязательные
   lifecycle-сценарии.
 

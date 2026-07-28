@@ -174,7 +174,8 @@ ammo policy.
   projectile не проходил сквозь тонкий слой земли;
 - React отвечает за HUD и controls, Canvas 2D — за поле, танки, projectiles и
   эффекты;
-- звук синтезируется через Web Audio после пользовательского действия;
+- отдельный audio module синтезирует музыку и event-driven SFX через Web Audio
+  после пользовательского действия; все `33 + 10` items имеют typed profile;
 - симуляция не зависит от частиц, звука, частоты кадров и camera shake.
 
 Player-owned combat state хранится на стабильном объекте tank: выбранное
@@ -183,8 +184,10 @@ Player-owned combat state хранится на стабильном объек�
 Каждый shot фиксирует owner до асинхронного visual resolution; расход ammo,
 damage credit и восстановление следующего хода используют этого owner, а не
 позднее значение active player. При передаче хода transient Arsenal Deck
-закрывается и сбрасывает presentation-фильтр. Звук, effect intensity, reduced
-motion, pause, ruleset, round, wind и мир остаются общими настройками матча.
+закрывается и сбрасывает presentation-фильтр. Music/SFX имеют независимые
+persisted on/off и volume; effect intensity, reduced motion, pause, ruleset,
+round, wind и мир остаются общими настройками матча. Аудиограф и lifecycle
+описаны в [спецификации sound design](specs/audio-design.md).
 Выбранный `DemoMatchMode` также является общей явной настройкой матча.
 
 Чистые системы находятся в `lib/game/`, presentation — в `app/game/`. Их
