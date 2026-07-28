@@ -3962,8 +3962,10 @@ export default function ScorchedGame() {
   const lastFrameRef = useRef(0);
   const weaponDialogRef = useRef<HTMLDialogElement | null>(null);
   const weaponTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const weaponCloseOutcomeRef = useRef<SelectorCloseOutcome | null>(null);
   const shieldDialogRef = useRef<HTMLDialogElement | null>(null);
   const shieldTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const shieldCloseOutcomeRef = useRef<SelectorCloseOutcome | null>(null);
   const weaponOptionRefs = useRef<
     Partial<Record<PlayableWeaponId, HTMLButtonElement | null>>
   >({});
@@ -4028,32 +4030,50 @@ export default function ScorchedGame() {
     setRevision((revision) => revision + 1);
   }, []);
 
-  const closeWeaponSelector = useCallback(
-    (outcome: SelectorCloseOutcome = "cancelled") => {
-      setWeaponSelectorOpen(false);
-      if (weaponDialogRef.current?.open) {
-        weaponDialogRef.current.close();
-      }
+  const focusAfterWeaponSelectorClose = useCallback(
+    (outcome: SelectorCloseOutcome) =>
       scheduleSelectorFocus(outcome, {
         gameplayOwner: canvasRef.current,
         trigger: weaponTriggerRef.current,
-      });
+      }),
+    [],
+  );
+
+  const closeWeaponSelector = useCallback(
+    (outcome: SelectorCloseOutcome = "cancelled") => {
+      setWeaponSelectorOpen(false);
+      weaponCloseOutcomeRef.current = outcome;
+      if (weaponDialogRef.current?.open) {
+        weaponDialogRef.current.close();
+        return;
+      }
+      weaponCloseOutcomeRef.current = null;
+      focusAfterWeaponSelectorClose(outcome);
     },
+    [focusAfterWeaponSelectorClose],
+  );
+
+  const focusAfterShieldSelectorClose = useCallback(
+    (outcome: SelectorCloseOutcome) =>
+      scheduleSelectorFocus(outcome, {
+        gameplayOwner: canvasRef.current,
+        trigger: shieldTriggerRef.current,
+      }),
     [],
   );
 
   const closeShieldSelector = useCallback(
     (outcome: SelectorCloseOutcome = "cancelled") => {
       setShieldSelectorOpen(false);
+      shieldCloseOutcomeRef.current = outcome;
       if (shieldDialogRef.current?.open) {
         shieldDialogRef.current.close();
+        return;
       }
-      scheduleSelectorFocus(outcome, {
-        gameplayOwner: canvasRef.current,
-        trigger: shieldTriggerRef.current,
-      });
+      shieldCloseOutcomeRef.current = null;
+      focusAfterShieldSelectorClose(outcome);
     },
-    [],
+    [focusAfterShieldSelectorClose],
   );
 
   const resetTransientSelectorsForTurnChange = useCallback(() => {
@@ -5282,6 +5302,11 @@ export default function ScorchedGame() {
         }}
         onClose={() => {
           setWeaponSelectorOpen(false);
+          const outcome = weaponCloseOutcomeRef.current;
+          weaponCloseOutcomeRef.current = null;
+          if (outcome) {
+            focusAfterWeaponSelectorClose(outcome);
+          }
         }}
       >
         <div className={styles.weaponDialogShell}>
@@ -5489,6 +5514,11 @@ export default function ScorchedGame() {
         }}
         onClose={() => {
           setShieldSelectorOpen(false);
+          const outcome = shieldCloseOutcomeRef.current;
+          shieldCloseOutcomeRef.current = null;
+          if (outcome) {
+            focusAfterShieldSelectorClose(outcome);
+          }
         }}
       >
         <div

@@ -87,6 +87,7 @@ describe("weapon selector focus handoff", () => {
     option.addEventListener("click", () => {
       optionClicks += 1;
       dialog.removeAttribute("open");
+      trigger.focus();
       focusImmediately("committed", gameplayOwner, trigger);
     });
     const onKeyDown = (event: KeyboardEvent) => {
