@@ -4,6 +4,7 @@ import {
   angleDeltaForScreenDirection,
   barrelEndX,
   getGameKeyboardAction,
+  isAimingKeyboardOwner,
   isKeyboardControlTarget,
 } from "../app/game/keyboard-controls";
 
@@ -121,7 +122,7 @@ describe("game keyboard controls", () => {
     ).toEqual({ type: "toggle-pause" });
   });
 
-  it.each(["input", "BUTTON", "Select"])(
+  it.each(["input", "BUTTON", "Select", "textarea", "a"])(
     "ignores shortcuts from a %s control",
     (tagName) => {
       const target = { tagName } as unknown as EventTarget;
@@ -141,4 +142,42 @@ describe("game keyboard controls", () => {
       ).toBeNull();
     },
   );
+
+  it("allows only aiming arrows from the focused weapon trigger", () => {
+    const target = {
+      tagName: "button",
+      getAttribute: (name: string) =>
+        name === "data-game-keyboard-owner" ? "aiming" : null,
+    } as unknown as EventTarget;
+
+    expect(isKeyboardControlTarget(target)).toBe(true);
+    expect(isAimingKeyboardOwner(target)).toBe(true);
+    expect(
+      getGameKeyboardAction("ArrowRight", {
+        ...aimingContext,
+        target,
+      }),
+    ).toEqual({
+      type: "adjust-angle",
+      screenDirection: 1,
+    });
+    expect(
+      getGameKeyboardAction("ArrowUp", {
+        ...aimingContext,
+        target,
+      }),
+    ).toEqual({ type: "adjust-power", delta: 10 });
+    expect(
+      getGameKeyboardAction("Enter", {
+        ...aimingContext,
+        target,
+      }),
+    ).toBeNull();
+    expect(
+      getGameKeyboardAction("Space", {
+        ...aimingContext,
+        target,
+      }),
+    ).toBeNull();
+  });
 });

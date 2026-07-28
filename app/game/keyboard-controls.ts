@@ -27,9 +27,56 @@ function targetTagName(target: EventTarget | null): string | null {
   return target.tagName.toUpperCase();
 }
 
+function targetAttribute(
+  target: EventTarget | null,
+  name: string,
+): string | null {
+  if (
+    target === null ||
+    typeof target !== "object" ||
+    !("getAttribute" in target) ||
+    typeof target.getAttribute !== "function"
+  ) {
+    return null;
+  }
+
+  return target.getAttribute(name);
+}
+
 export function isKeyboardControlTarget(target: EventTarget | null): boolean {
   const tagName = targetTagName(target);
-  return tagName === "INPUT" || tagName === "BUTTON" || tagName === "SELECT";
+  const contentEditable =
+    target !== null &&
+    typeof target === "object" &&
+    "isContentEditable" in target &&
+    target.isContentEditable === true;
+
+  return (
+    contentEditable ||
+    tagName === "A" ||
+    tagName === "BUTTON" ||
+    tagName === "INPUT" ||
+    tagName === "SELECT" ||
+    tagName === "TEXTAREA"
+  );
+}
+
+export function isAimingKeyboardOwner(
+  target: EventTarget | null,
+): boolean {
+  return (
+    targetTagName(target) === "BUTTON" &&
+    targetAttribute(target, "data-game-keyboard-owner") === "aiming"
+  );
+}
+
+function isAimingArrow(code: string): boolean {
+  return (
+    code === "ArrowLeft" ||
+    code === "ArrowRight" ||
+    code === "ArrowUp" ||
+    code === "ArrowDown"
+  );
 }
 
 export function angleDeltaForScreenDirection(
@@ -53,7 +100,10 @@ export function getGameKeyboardAction(
   code: string,
   context: KeyboardControlContext,
 ): GameKeyboardAction | null {
-  if (isKeyboardControlTarget(context.target)) {
+  if (
+    isKeyboardControlTarget(context.target) &&
+    !(isAimingKeyboardOwner(context.target) && isAimingArrow(code))
+  ) {
     return null;
   }
 

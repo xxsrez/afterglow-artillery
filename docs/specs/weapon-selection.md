@@ -111,6 +111,9 @@ keyboard focus.
 - Enter/Space выбирают доступную позицию и закрывают selector.
 - Escape закрывает selector без смены оружия.
 - После выбора или закрытия focus возвращается на current-weapon control.
+- После возврата focus стрелки сразу принадлежат прицеливанию без
+  дополнительного click; Enter/Space остаются нативным способом снова открыть
+  selector.
 - Modal focus trap не позволяет случайно перейти к Fire.
 
 ### Pointer и touch
@@ -145,7 +148,8 @@ keyboard focus.
 - последовательную keyboard-навигацию и границы `Home/End`;
 - отсутствие depleted weapon среди выбираемых;
 - сохранение `Q/E` cycle;
-- focus entry/return и Escape — browser smoke.
+- focus entry/return, Escape и немедленный возврат стрелок игре — DOM
+  regression и browser smoke.
 
 Desktop browser smoke проверяет выбор, повторное открытие, focus, Escape,
 depleted и отсутствие случайного Fire. Физический телефон в landscape должен

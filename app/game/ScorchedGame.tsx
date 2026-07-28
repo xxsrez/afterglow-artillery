@@ -3111,10 +3111,26 @@ export default function ScorchedGame() {
   const handleWeaponGridKeyDown = (
     event: ReactKeyboardEvent<HTMLDivElement>,
   ) => {
+    const currentOption = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-weapon-id]",
+    );
+
     if (isWeaponSelectorCloseKey(event.key)) {
       event.preventDefault();
       event.stopPropagation();
       closeWeaponSelector();
+      return;
+    }
+
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      currentOption?.dataset.weaponId
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectWeaponFromSelector(
+        currentOption.dataset.weaponId as WeaponId,
+      );
       return;
     }
 
@@ -3129,9 +3145,6 @@ export default function ScorchedGame() {
       return;
     }
 
-    const currentOption = (event.target as HTMLElement).closest<HTMLElement>(
-      "[data-weapon-id]",
-    );
     const currentId =
       (currentOption?.dataset.weaponId as WeaponId | undefined) ??
       selectedWeapon;
@@ -3678,6 +3691,7 @@ export default function ScorchedGame() {
               aria-haspopup="dialog"
               aria-expanded={weaponSelectorOpen}
               aria-controls="weapon-selector-dialog"
+              data-game-keyboard-owner="aiming"
               aria-label={`Открыть арсенал: ${selectedWeaponDefinition.name}, ${
                 selectedWeaponDefinition.ammo.kind === "unlimited"
                   ? "бесконечный запас"
