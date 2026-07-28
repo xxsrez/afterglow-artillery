@@ -42,7 +42,7 @@ test("server-renders the game shell and production metadata", async () => {
   assert.match(html, /Поверните телефон/);
   assert.match(
     html,
-    /property="og:image" content="http:\/\/localhost:3000\/og\.png"/i,
+    /property="og:image" content="http:\/\/localhost:3000\/og-funky\.png"/i,
   );
   assert.match(html, /name="twitter:card" content="summary_large_image"/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);

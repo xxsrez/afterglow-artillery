@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 const description =
-  "Яркая пошаговая артиллерия: наводите орудие, учитывайте ветер и перекраивайте поле боя каждым выстрелом.";
+  "Яркая пошаговая артиллерия с полным арсеналом из 33 видов оружия и особенно эффектной Funky Bomb.";
 
 function getRequestOrigin(headerStore: Headers): string {
   const forwardedHost = headerStore.get("x-forwarded-host")?.split(",")[0];
@@ -49,7 +49,7 @@ function getRequestOrigin(headerStore: Headers): string {
 
 export async function generateMetadata(): Promise<Metadata> {
   const origin = getRequestOrigin(await headers());
-  const socialImage = new URL("/og.png", origin).toString();
+  const socialImage = new URL("/og-funky.png", origin).toString();
 
   return {
     title: "AFTERGLOW // ARTILLERY",
@@ -61,16 +61,16 @@ export async function generateMetadata(): Promise<Metadata> {
     openGraph: {
       title: "AFTERGLOW // ARTILLERY",
       description:
-        "Пошаговая браузерная артиллерия с разрушаемым рельефом и выразительными эффектами оружия.",
+        "33 вида оружия, разрушаемый рельеф и радужная цепная реакция Funky Bomb.",
       type: "website",
       locale: "ru_RU",
       url: origin,
       images: [
         {
           url: socialImage,
-          width: 1734,
-          height: 907,
-          alt: "Afterglow Artillery — два танка и три яркие траектории над разрушаемым полем боя",
+          width: 1672,
+          height: 941,
+          alt: "Afterglow Artillery — два танка и двенадцать радужных вспышек Funky Bomb над разрушаемым полем боя",
         },
       ],
     },
@@ -78,7 +78,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title: "AFTERGLOW // ARTILLERY",
       description:
-        "Пошаговая браузерная артиллерия с разрушаемым рельефом и выразительными эффектами оружия.",
+        "33 вида оружия, разрушаемый рельеф и радужная цепная реакция Funky Bomb.",
       images: [socialImage],
     },
   };
