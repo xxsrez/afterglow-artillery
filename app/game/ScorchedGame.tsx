@@ -67,6 +67,10 @@ import {
   getGameKeyboardAction,
 } from "./keyboard-controls";
 import {
+  scheduleSelectorFocus,
+  type SelectorCloseOutcome,
+} from "./selector-focus";
+import {
   isShieldSelectorCloseKey,
   nextShieldFocus,
 } from "./shield-selector";
@@ -4024,29 +4028,33 @@ export default function ScorchedGame() {
     setRevision((revision) => revision + 1);
   }, []);
 
-  const restoreWeaponTriggerFocus = useCallback(() => {
-    requestAnimationFrame(() => weaponTriggerRef.current?.focus());
-  }, []);
+  const closeWeaponSelector = useCallback(
+    (outcome: SelectorCloseOutcome = "cancelled") => {
+      setWeaponSelectorOpen(false);
+      if (weaponDialogRef.current?.open) {
+        weaponDialogRef.current.close();
+      }
+      scheduleSelectorFocus(outcome, {
+        gameplayOwner: canvasRef.current,
+        trigger: weaponTriggerRef.current,
+      });
+    },
+    [],
+  );
 
-  const closeWeaponSelector = useCallback(() => {
-    setWeaponSelectorOpen(false);
-    if (weaponDialogRef.current?.open) {
-      weaponDialogRef.current.close();
-    }
-    restoreWeaponTriggerFocus();
-  }, [restoreWeaponTriggerFocus]);
-
-  const restoreShieldTriggerFocus = useCallback(() => {
-    requestAnimationFrame(() => shieldTriggerRef.current?.focus());
-  }, []);
-
-  const closeShieldSelector = useCallback(() => {
-    setShieldSelectorOpen(false);
-    if (shieldDialogRef.current?.open) {
-      shieldDialogRef.current.close();
-    }
-    restoreShieldTriggerFocus();
-  }, [restoreShieldTriggerFocus]);
+  const closeShieldSelector = useCallback(
+    (outcome: SelectorCloseOutcome = "cancelled") => {
+      setShieldSelectorOpen(false);
+      if (shieldDialogRef.current?.open) {
+        shieldDialogRef.current.close();
+      }
+      scheduleSelectorFocus(outcome, {
+        gameplayOwner: canvasRef.current,
+        trigger: shieldTriggerRef.current,
+      });
+    },
+    [],
+  );
 
   const resetTransientSelectorsForTurnChange = useCallback(() => {
     setWeaponSelectorOpen(false);
@@ -4407,7 +4415,7 @@ export default function ScorchedGame() {
         return;
       }
       selectWeapon(weaponId);
-      closeWeaponSelector();
+      closeWeaponSelector("committed");
     },
     [closeWeaponSelector, selectWeapon],
   );
@@ -4429,7 +4437,7 @@ export default function ScorchedGame() {
         `${ultimate.name}: Experimental Showcase, бесконечный доступ. ` +
         `${ultimate.description}`;
       void ensureAudio();
-      closeWeaponSelector();
+      closeWeaponSelector("committed");
       refresh();
     },
     [closeWeaponSelector, ensureAudio, refresh],
@@ -4510,7 +4518,7 @@ export default function ScorchedGame() {
       game.message = `${tank.name}: выбран ${shield.name}, заряд ${Math.ceil(
         tank.shield,
       )}. Выбор второго пилота останется независимым.`;
-      closeShieldSelector();
+      closeShieldSelector("committed");
       refresh();
     },
     [closeShieldSelector, refresh],
@@ -4989,6 +4997,8 @@ export default function ScorchedGame() {
         className={styles.canvas}
         width={WORLD_WIDTH}
         height={WORLD_HEIGHT}
+        tabIndex={-1}
+        data-game-keyboard-owner="aiming"
         aria-label="Артиллерийское поле с двумя танками и разрушаемым рельефом"
       />
 
@@ -5272,7 +5282,6 @@ export default function ScorchedGame() {
         }}
         onClose={() => {
           setWeaponSelectorOpen(false);
-          restoreWeaponTriggerFocus();
         }}
       >
         <div className={styles.weaponDialogShell}>
@@ -5289,7 +5298,7 @@ export default function ScorchedGame() {
             <button
               type="button"
               className={styles.weaponDialogClose}
-              onClick={closeWeaponSelector}
+              onClick={() => closeWeaponSelector()}
               aria-label="Закрыть арсенал"
             >
               ×
@@ -5480,7 +5489,6 @@ export default function ScorchedGame() {
         }}
         onClose={() => {
           setShieldSelectorOpen(false);
-          restoreShieldTriggerFocus();
         }}
       >
         <div
@@ -5498,7 +5506,7 @@ export default function ScorchedGame() {
             <button
               type="button"
               className={styles.weaponDialogClose}
-              onClick={closeShieldSelector}
+              onClick={() => closeShieldSelector()}
               aria-label="Закрыть каталог щитов"
             >
               ×
