@@ -17,7 +17,10 @@ export function transitionSettingsScreen(
     case "start-match":
       return screen === "start" && phase === "intro" ? "closed" : screen;
     case "open-settings":
-      return screen === "closed" && phase === "aiming" ? "match" : screen;
+      return screen === "closed" &&
+        (phase === "aiming" || phase === "firing")
+        ? "match"
+        : screen;
     case "close-settings":
       return screen === "match" ? "closed" : screen;
     case "reset-match":

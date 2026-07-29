@@ -108,7 +108,9 @@ export function getGameKeyboardAction(
   }
 
   if (code === "Escape" || code === "KeyP") {
-    return context.phase === "aiming" || context.settingsOpen
+    return context.phase === "aiming" ||
+      context.phase === "firing" ||
+      context.settingsOpen
       ? { type: "toggle-settings" }
       : null;
   }

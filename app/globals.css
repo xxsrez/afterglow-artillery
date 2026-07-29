@@ -276,11 +276,7 @@ button,
 @media (orientation: landscape) and (max-height: 520px) {
   .game-shell {
     grid-template-rows: minmax(0, 1fr);
-    padding:
-      max(0.25rem, env(safe-area-inset-top))
-      max(0.35rem, env(safe-area-inset-right))
-      max(0.3rem, env(safe-area-inset-bottom))
-      max(0.35rem, env(safe-area-inset-left));
+    padding: 0;
   }
 
   .game-masthead {
@@ -288,7 +284,8 @@ button,
   }
 
   .game-stage {
-    border-radius: 0.38rem;
+    border: 0;
+    border-radius: 0;
   }
 }
 

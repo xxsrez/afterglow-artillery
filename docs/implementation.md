@@ -1,7 +1,7 @@
 # Реализованный Quick Demo
 
 - **Статус:** реализовано
-- **Обновлено:** 2026-07-28
+- **Обновлено:** 2026-07-29
 - **Область:** текущая браузерная версия с полным demo arsenal, не полный Classic
 
 ## Игровой цикл
@@ -192,6 +192,10 @@ ammo policy.
   навигацию по minimap, пошаговый сдвиг кнопками и возврат к активному танку;
   во время выстрела auto-follow удерживает в кадре траекторию и место
   разрешения эффекта;
+- mobile Canvas больше не использует фиксированный `960 × 540` letterbox:
+  `ResizeObserver`, `visualViewport`, orientation/resize events и актуальный
+  DPR синхронизируют CSS viewport с backing store, а input mapping читает
+  фактический `getBoundingClientRect()`;
 - seeded PRNG, генерация поля и баллистика воспроизводимы;
 - Quick Demo registry стратегий и чистые roller/digger/flow/cluster
   path-builders вынесены из React adapter в `lib/game/`; Digger, Sandhog и
@@ -277,18 +281,30 @@ resume. Эти механизмы не меняют симуляцию. Apple mo
 Экранные элементы поддерживают touch и мышь; клавиатура дублирует основные
 действия. Интерфейс рассчитан на альбомную ориентацию и показывает отдельное
 приглашение повернуть узкий телефон. На коротком landscape viewport masthead
-скрывается, HUD и управление уплотняются без уменьшения touch-targets ниже
-48 CSS px, а safe-area учитывается один раз внешней оболочкой. На время полёта
-снаряда нижняя панель скрывается и освобождает поле для траектории и эффекта.
-В закрытом состоянии выбор оружия показывает одну крупную current-weapon
-кнопку с названием, механической ролью и ammo. Она открывает native modal
-Arsenal Deck: все 33 позиции доступны в прокручиваемой сетке с фильтрами по
-роли, selected/depleted состояниями, стрелочной навигацией, `Escape` и
-возвратом focus. Modal блокирует случайный Fire, на коротком landscape
-становится bottom sheet, а при переходе в portrait закрывается перед
-orientation gate. В Infinite Arsenal рядом находится отдельный Shield Bay с
-тем же focus/touch contract; оба selector закрываются при handoff. Магазин
-сохраняет собственные cards и отдельно показывает buy/sell quotes.
+скрывается. Поверх поля остаются верхняя combat strip `48 px`, нижняя action
+rail `64 px` и закрытая кнопка камеры `48×48 px`; вместе HUD и rail занимают
+не больше `112 px`. Angle/power steppers меняют значения на `1°` и `10`,
+центральные значения открывают взаимоисключающие precision trays, которые
+блокируют Fire.
+
+Compact weapon/shield chips открывают fullscreen native Loadout с вкладками.
+Все 33 позиции доступны в прокручиваемой сетке с фильтрами по роли,
+selected/depleted состояниями, стрелочной навигацией, `Escape` и возвратом
+focus. Modal делает фон inert и блокирует случайный Fire; при переходе в
+portrait закрывается перед orientation gate. Одна camera-кнопка открывает
+popover с minimap и controls и остаётся выше popover в hit-testing.
+
+Coarse-pointer Fire требует непрерывного удержания `350 ms` внутри кнопки;
+ранний release, уход pointer за границу, cancel/lost capture, background,
+Pause и открытие transient UI отменяют hold. После порога fire вызывается
+один раз. Mouse/keyboard flow остаётся обычным явным действием. На время полёта
+action rail и camera control скрываются; combat strip и Pause остаются
+доступными, а открытый Pause замораживает simulation/audio до resume.
+
+Safe-area учитывается со всех сторон. При высоте ниже `286 px` вместо боя
+показывается просьба закрыть панели браузера. Короткий status toast скрывается
+примерно через две секунды, а отдельный `aria-live` сохраняет сообщение.
+Магазин сохраняет собственные cards и отдельно показывает buy/sell quotes.
 Для пользователей с `prefers-reduced-motion` сокращаются тряска и декоративное
 движение, но не исчезают механические cues.
 
@@ -296,10 +312,16 @@ orientation gate. В Infinite Arsenal рядом находится отдель
 
 Для релизного состояния обязательна команда `npm run check`: она последовательно
 запускает ESLint, strict TypeScript, unit-тесты, production build и проверку
-server-rendered HTML. После этого основной поток должен дополнительно
-проверяться во встроенном браузере на desktop и landscape 844×390, 852×393,
-932×430 и 667×375. Высота 844×320 служит прокси для раскрытых панелей мобильного
-браузера; portrait 390×844 проверяется как корректный orientation gate.
+server-rendered HTML. `npm run test:mobile` отдельно поднимает production-like
+dev server и прогоняет Chromium/WebKit matrix для Quick Demo и Infinite
+Arsenal на `667×375`, `844×390`, `852×393`, `932×430`, `844×320` и
+`932×296`. Suite измеряет overlap/overflow, canvas coverage, touch targets,
+Fire gap, fullscreen Loadout, precision trays, camera popover, coarse-pointer
+hold/cancel, Pause, resize/orientation, portrait gate и browser
+console/page errors; layout snapshots маскируют недетерминированную Canvas
+presentation. Высота `844×320` служит прокси для раскрытых панелей мобильного
+браузера, portrait `390×844` — для orientation gate. После автоматики основной
+поток дополнительно проверяется во встроенном браузере.
 
 ## Осознанные ограничения
 
@@ -318,6 +340,10 @@ server-rendered HTML. После этого основной поток долж
 - производительность на физическом среднем Android-устройстве пока не
   измерена: device trace и physical touch pass не выполнялись, поэтому
   совместимость формулируется как целевая, а не подтверждённая.
+- mobile geometry и interaction suite пройдены только в desktop-hosted
+  Chromium/WebKit: реальный iPhone Safari pass с browser chrome, safe-area,
+  системными жестами, coarse hold-to-fire и rotate/resize всё ещё обязателен
+  перед закрытием `AND-19`.
 - качество нового микса на физическом iPhone, встроенном mono-динамике,
   headphones и при системном Silent Mode требует отдельного listening pass:
   успешный decode и `AudioContext.state === "running"` этого не доказывают.

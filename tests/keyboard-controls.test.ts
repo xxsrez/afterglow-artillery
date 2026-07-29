@@ -119,7 +119,7 @@ describe("game keyboard controls", () => {
         ...aimingContext,
         phase: "firing",
       }),
-    ).toBeNull();
+    ).toEqual({ type: "toggle-settings" });
     expect(
       getGameKeyboardAction("KeyP", {
         ...aimingContext,
