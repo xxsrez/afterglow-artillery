@@ -38,21 +38,29 @@ KEY: <KEY>
 комментариями соответствующей issue. После первого create сохраняй comment ID
 в coordinator state; следующие записи делай update этого ID.
 
+Normal path допускает один create и только содержательные state-transition
+updates каждого key. Не обновляй receipt для poll, начала shell command,
+неизменившегося heartbeat или промежуточного лога. После сохранения comment ID
+не перечитывай весь comment history без recovery-причины, scope change или
+ошибки update. Несколько полей одного checkpoint записывай одним upsert.
+
 ## RELEASE_RUN
 
 Key: `<release_id>`.
 
 ```text
-STATUS: planning | dispatching | assembling | sealed | validating |
+STATUS: planning | migrating | dispatching | assembling | sealed | validating |
         default-pushed | deploying | live-awaiting-tag | checkpoint | complete |
         needs-input
 RUN_ID: <stable id>
 GOAL: <goal id/objective fingerprint>
+CONTRACT: digest=<hash>; migrated_from=<hash|none>
 PROJECT_ID: <id>
 RELEASE_ID: <id>; name=<name>
 COORDINATOR_REF: <remote ref=commit>
 DEFAULT_BRANCH: <name>; observed_sha=<full>
 WORKERS: requested=<1|N|auto|auto(max=N)>; effective=<n>; reason=<bounded>
+CAPABILITIES: available=<bounded>; not_available=<bounded>
 CURRENT_BATCH: <batch_id or none>; generation=<n or none>
 QUEUE_FINGERPRINT: <hash>
 STARTED_AT: <timestamp>
@@ -169,6 +177,7 @@ FEATURES: <topological identifier=base/dependencies->feature_sha@origin_ref>
 CANDIDATE: sha=<full>; tree=<oid>
 VALIDATION_KEY: tree=<oid>; gate=<hash>; env=<hash>
 VALIDATION: run=<pass/fail+timestamp> | reused=<receipt/key> | none
+PREPUSH_CI: sha=<full>; run/check=<id|not-available>; status=<terminal|none>
 MAIN: origin/<default>=<full>; cas=<pass/fail>
 CI: sha=<full>; run/check=<id|none>; status=<terminal|none>
 SITES: project=<id>; version=<number>; version_id=<id>;
@@ -208,3 +217,9 @@ Refs, CI и Sites факты авторитетнее пересказа в comm
 стадии. Переиспользуй найденные feature refs, CI result, Sites version,
 deployment и tag вместо создания дублей. Никогда не восстанавливай secret из
 receipt или лога.
+
+При несовпадении `CONTRACT.digest` сначала поставь `STATUS: migrating`,
+заморозь dispatch и инвентаризируй фактические external artifacts. Сохрани
+доказанные exact refs/checks/deployments старого run, но не наследуй его
+worker authority. Одним upsert запиши новый digest, `migrated_from` и первую
+незавершённую стадию; только после этого продолжай по текущему контракту.

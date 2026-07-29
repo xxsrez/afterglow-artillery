@@ -23,6 +23,11 @@ branch (сейчас `main`) -> Sites -> production smoke -> immutable release t
 ветки. Не создавай видимые Codex tasks/threads: используй внутренних subagents.
 Перечитывай этот файл в начале каждого goal-хода.
 
+Нормальный путь — один contract preflight, feature-only workers, один
+запечатанный candidate, один integrated gate на validation key, pre-push CI
+при доступности, один default push и один Sites deploy. Не превращай каждую
+issue или внутренний checkpoint в самостоятельный release.
+
 ## Понять вызов
 
 Разбирай весь текст текущего сообщения пользователя: указание количества может
@@ -83,6 +88,18 @@ effective_workers = min(
 batch. Один worker может последовательно подготовить несколько feature refs,
 после чего coordinator выпустит их одним batch.
 
+До первой мутации дай один компактный launch summary:
+
+```text
+mode=build-and-ship-milestone; unfinished=<n>; ready=<n>;
+implementation_required=<n>; workers=<requested/effective + reason>;
+lanes=<parallel/serial summary>; gates=<available>; gaps=<not-available>
+```
+
+`build-and-ship-milestone` означает, что skill не только публикует готовое, но
+и реализует незавершённые issue. Не спрашивай подтверждение этой уже явно
+вызванной семантики, но не скрывай объём за словом «release».
+
 Явный недвусмысленный запуск без `dry-run` разрешает в пределах закреплённого
 release:
 
@@ -140,13 +157,46 @@ Worker не мержит default branch, не деплоит, не тегиру�
 по умолчанию не мутирует Linear. Протокол worker:
 [issue-worker.md](references/issue-worker.md).
 
+Если worker всё же изменил default branch, Sites, tag или Linear, немедленно
+заморозь новый dispatch и восстанови фактическое состояние. Не принимай это
+как нормальный `FEATURE_RECEIPT`, не повторяй уже случившийся deploy и не
+разрешай worker-у продолжать. После reconciliation возобновляй run только по
+текущему tracked контракту.
+
+## Ограничить orchestration cost
+
+1. Нормальный batch делает не более одного Sites deploy и одного полного
+   integrated gate на validation key. Исключения — доказанный production
+   rollback и новая source generation после исправления.
+2. Не используй streaming watcher, который многократно печатает полный job
+   tree или лог. Проверяй внешний job компактным JSON/status snapshot не чаще
+   одного раза в 45–60 секунд; полный failing log читай один раз и только
+   нужный job/range.
+3. Жди workers через mailbox с bounded timeout, а не tight polling. После
+   timeout без нового события не перечитывай Linear, Git и receipts, если
+   внешний state не мог измениться.
+4. Батчируй независимые read-only tool calls. Не печатай полный diff, issue
+   list, comment history или build log, если достаточно bounded fields,
+   `--stat`, failing lines либо сохранённого comment ID.
+5. Linear receipts — checkpoints, не telemetry. Не обновляй их при каждом
+   poll, shell command или неизменившемся состоянии; правила записи находятся
+   в [receipts.md](references/receipts.md).
+6. Если normal-path invariant нарушен — появился второй per-issue deploy,
+   повторный full gate с тем же validation key, неизвестный worker-side
+   external mutation или дублирующий receipt — сначала восстанови ledger и
+   устрани причину, а не продолжай размножать artifacts.
+
 ## Выполнить preflight и восстановление
 
 1. Прочитай текущие `AGENTS.md`, `.openai/hosting.json`, Git default branch,
    remotes, status, refs и tags. Не меняй dirty пользовательский checkout.
-2. Убедись, что этот skill и его references tracked и доступны из pinned base
-   SHA. Если они существуют только как untracked/local files, останови реальный
-   запуск до commit: worktree не получит воспроизводимый контракт.
+2. Запиши Git tree OID
+   `<pinned_base>:.agents/skills/ship-linear-release` как `contract_digest`;
+   он охватывает `SKILL.md` и все bundled protocols. Убедись, что invoked
+   contract совпадает с этим tracked tree и доступен из pinned base SHA. Если
+   он untracked, отличается только в dirty checkout или отсутствует в base,
+   останови реальный запуск до отдельного contract commit. Не dispatch-и
+   worker и не откатывайся к старому single-issue delivery path.
 3. При `dry-run` выполняй только read-only путь: можно вызвать `get_goal`,
    разрешить exact project/milestone, прочитать scope/statuses/refs и построить
    dependency/conflict graph, proposed cohort, effective worker count и gate
@@ -160,6 +210,15 @@ Worker не мержит default branch, не деплоит, не тегиру�
 5. Восстанови прерванный run и получи свежий scope в порядке из
    [receipts.md](references/receipts.md): remote refs/tags -> exact-SHA CI ->
    Sites -> Linear scope/receipts -> локальные worktrees.
+   - Если сохранённый `contract_digest` отличается от текущего, сначала войди
+     в migration checkpoint: запрети новый dispatch, сопоставь старые
+     commits/refs/checks/deployments с фактическим state и сохрани пригодные
+     exact artifacts.
+   - Не объявляй работу недействительной только из-за старой версии skill и не
+     повторяй доказанные проверки/deploy. Старые workers больше не получают
+     authority; следующий dispatch использует только новый manifest.
+   - Обнови coordinator ref и `RELEASE_RUN` новым digest и краткой migration
+     записью, затем продолжай с первой реально незавершённой стадии.
 6. Если существующий `RELEASE_RUN` имеет status `complete`, свежий scope пуст и
    нет незавершённых artifacts, верни idempotent `already-complete` без нового
    goal/run. Если старый release-goal по факту ещё active, заверши его только
@@ -265,6 +324,7 @@ Dependency SHAs: <ordered refs или none>.
 Queue fingerprint: <hash>. Issue updatedAt: <timestamp>.
 Ownership paths: <paths>. Isolated env/cache/tmp/ports: <values>.
 Resume: <none или exact artifacts>.
+Forbidden: default branch, Linear mutations, Sites, tags, release closure.
 Прочитай <worktree>/.agents/skills/ship-linear-release/references/issue-worker.md
 и AGENTS.md из worktree. Ты не один: не откатывай и не захватывай чужие
 изменения. Не создавай subagents. Верни только bounded receipt.
@@ -301,8 +361,16 @@ slot и продолжай cohort, пока есть готовые задачи
    `tree OID + gate contract hash + environment fingerprint`.
 7. Для этого repo `npm run check` уже включает build и rendered-HTML gate:
    не запускай затем `npm run test:render` без отдельной причины. Добавь
-   batch-wide affected browser flows и применимые device/performance checks из
+   batch-wide affected browser flows и доступные device/performance checks из
    `AGENTS.md`.
+8. После локального gate и до default push запусти CI exact candidate SHA,
+   если существующая CI-конфигурация поддерживает безопасный branch,
+   pull-request или manual-dispatch path. Не меняй внешнюю инфраструктуру
+   только ради этого release. Если pre-push CI недоступен, запиши
+   `not-available`; не подменяй им required CI после default push.
+9. До CI классифицируй checks как portable или platform-bound. Не сравнивай
+   macOS pixel baselines на Linux и не заявляй cross-platform parity без
+   соответствующих baselines.
 
 ## Обработать найденные дефекты
 
@@ -342,8 +410,10 @@ batch без неё и выпусти независимые issue. Серьёз
    force. При drift создай новое generation на свежем base; переиспользуй
    feature refs, но integrated validation — только при совпавшем validation
    key.
-3. Дождись required CI для exact candidate SHA, если required CI настроен.
-   Отсутствие configured CI запиши как `none`, не выдумывай check.
+3. Дождись required CI для exact candidate SHA после default push, если
+   required CI настроен. Успешный pre-push run не отменяет этот gate, но при
+   неизменном validation key не повторяй локальный full suite. Отсутствие
+   configured CI запиши как `none`, не выдумывай check.
 4. Сохрани и deploy ровно одну Sites version exact validated SHA. Продолжай по
    найденным opaque IDs после прерывания, не создавай дубликаты.
 5. После terminal `succeeded` выполни cache-busted HTTP и затронутые production

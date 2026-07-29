@@ -81,6 +81,26 @@ script уже включает тот же build/render gate.
 подключённого устройства во время предыдущего batch в доказательство
 совместимости или в причину скрыть новый fail.
 
+## Проверить candidate до default branch
+
+После локального integrated gate проверь, поддерживает ли уже существующая
+CI-конфигурация exact-SHA run для candidate branch, pull request или
+manual dispatch. Если поддерживает, запусти его до default branch и запиши
+bounded `PREPUSH_CI` evidence. Не создавай PR и не меняй CI/infrastructure
+только ради ускорения без уже имеющегося разрешённого path.
+
+До запуска раздели checks:
+
+- `portable` — unit/type/build, geometry, interaction и browser behavior,
+  которые имеют одинаковый контракт на runner OS;
+- `platform-bound` — pixel snapshots, branded browser/device, listening и
+  performance baselines конкретной среды.
+
+Не запускай platform-bound macOS baselines на Linux и не ослабляй diff
+threshold ради зелёного CI. При отсутствии подходящего pre-push path запиши
+`PREPUSH_CI: not-available` и продолжай по локальному gate; required CI exact
+default SHA остаётся обязательным после push.
+
 ## Продвинуть exact candidate
 
 1. Fetch-ом потребуй `origin/<default> == expected_default_sha` и fast-forward
@@ -89,8 +109,13 @@ script уже включает тот же build/render gate.
    update CAS: при drift перечитай refs и пересобери/revalidate candidate; не
    переписывай чужую историю.
 3. Дождись required CI именно для `candidate_sha`, если required CI настроен.
-   Не подменяй его проверкой другого commit с тем же содержимым; отсутствие
-   configured CI запиши как `none`.
+   Не подменяй его pre-push run или проверкой другого commit с тем же
+   содержимым. При совпавшем validation key не повторяй локальный full gate.
+   Проверяй job компактным status snapshot раз в 45–60 секунд, не streaming
+   watcher-ом. Полный failing log читай один раз и только для упавшего job.
+   Один явно stalled/infra-flake run можно cancel/retry на неизменном SHA;
+   повторная необъяснённая нестабильность — external gap, а не бесконечный
+   retry. Отсутствие configured CI запиши как `none`.
 4. Найди существующие Sites artifacts этого SHA. Если их нет, один раз сохрани
    version из exact validated build и один раз deploy её. Повторный ход
    продолжай по сохранённым opaque IDs, не создавая дубликаты.
