@@ -415,7 +415,7 @@ function localSurfaceWindow(
   return samples;
 }
 
-function sculptSpawnShelf(
+export function prepareSurfaceSpawnShelf(
   terrain: TerrainGrid,
   centerX: number,
   padHalfWidth: number,
@@ -603,7 +603,7 @@ export function findSpawnSites(
   return pickedX
     .sort((left, right) => left - right)
     .map((x) => {
-      const supportY = sculptSpawnShelf(terrain, x, padHalfWidth);
+      const supportY = prepareSurfaceSpawnShelf(terrain, x, padHalfWidth);
       return {
         x,
         y: supportY - tankHalfHeight,

@@ -25,6 +25,8 @@ import {
   buildFunkyChain,
   buildRollPath,
   buildUndergroundFan,
+  type BattlefieldLayoutProfile,
+  type BattlefieldSpawnKind,
   calculateInterest,
   consumePlayerWeapon,
   createDemoInventory,
@@ -207,6 +209,12 @@ interface ShieldMatchEvent {
 
 interface GameModel {
   seed: number;
+  battlefieldProfile: BattlefieldLayoutProfile;
+  battlefieldProfileOverride: BattlefieldLayoutProfile | null;
+  battlefieldSpawnKinds: readonly [
+    BattlefieldSpawnKind,
+    BattlefieldSpawnKind,
+  ];
   mode: DemoMatchMode;
   phase: GamePhase;
   round: number;
@@ -489,13 +497,25 @@ function makePlayer(
   };
 }
 
-function createGame(seed = 41_705): GameModel {
-  const battlefield = generateBattlefield(seed);
+function createGame(
+  seed = 41_705,
+  battlefieldProfileOverride: BattlefieldLayoutProfile | null = null,
+): GameModel {
+  const battlefield = generateBattlefield(seed, {
+    roundNumber: 1,
+    layoutProfile: battlefieldProfileOverride ?? undefined,
+  });
   const { terrain, spawns } = battlefield;
   const windSnapshot = createWindSnapshot(seed, QUICK_DEMO_WIND_RULES);
 
   return {
     seed,
+    battlefieldProfile: battlefield.plan.profile,
+    battlefieldProfileOverride,
+    battlefieldSpawnKinds: [
+      battlefield.spawns[0].kind,
+      battlefield.spawns[1].kind,
+    ],
     mode: DEFAULT_DEMO_MATCH_MODE,
     phase: "intro",
     round: 1,
@@ -521,6 +541,19 @@ function createGame(seed = 41_705): GameModel {
     effectLevel: "full",
     message: "Настройте угол и силу. Первый выстрел за пилотом Лайм.",
   };
+}
+
+function battlefieldProfileFromLocation(): BattlefieldLayoutProfile | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const profile = new URLSearchParams(window.location.search).get("layout");
+  return profile === "open" ||
+    profile === "ridge" ||
+    profile === "valley" ||
+    profile === "cavern"
+    ? profile
+    : null;
 }
 
 function weaponAmmo(tank: PlayerTank, weaponId: WeaponId): number {
@@ -2005,10 +2038,16 @@ function prepareNextRound(model: GameModel): void {
   model.round += 1;
   model.turn = 0;
   model.activePlayer = model.round % 2 === 0 ? 1 : 0;
-  const battlefield = generateBattlefield(
-    model.seed + (model.round - 1) * 7_919,
-  );
+  const battlefield = generateBattlefield(model.seed, {
+    roundNumber: model.round,
+    layoutProfile: model.battlefieldProfileOverride ?? undefined,
+  });
   model.terrain = battlefield.terrain;
+  model.battlefieldProfile = battlefield.plan.profile;
+  model.battlefieldSpawnKinds = [
+    battlefield.spawns[0].kind,
+    battlefield.spawns[1].kind,
+  ];
   model.terrainRevision += 1;
   queueFullTerrainRedraw(model);
   model.roundWinner = null;
@@ -4000,8 +4039,27 @@ export default function ScorchedGame() {
   }, []);
 
   useEffect(() => {
+    const profileOverride = battlefieldProfileFromLocation();
+    if (
+      profileOverride !== null &&
+      gameRef.current.battlefieldProfileOverride !== profileOverride
+    ) {
+      gameRef.current = createGame(
+        gameRef.current.seed,
+        profileOverride,
+      );
+      cameraRef.current = createCamera(
+        cameraTargetForTank(
+          gameRef.current.tanks[gameRef.current.activePlayer],
+        ),
+        viewportRef.current,
+        cameraWorldForTerrain(gameRef.current.terrain),
+      );
+      terrainCacheRef.current = null;
+      refresh();
+    }
     setClientReady(true);
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     const releaseGate = (event: PointerEvent) => {
@@ -6052,7 +6110,10 @@ export default function ScorchedGame() {
 
   const resetGame = useCallback(() => {
     const previous = gameRef.current;
-    gameRef.current = createGame(previous.seed + 1);
+    gameRef.current = createGame(
+      previous.seed + 1,
+      previous.battlefieldProfileOverride,
+    );
     gameRef.current.audio = previous.audio;
     gameRef.current.audioAvailable = previous.audioAvailable;
     gameRef.current.audioDiagnostic = previous.audioDiagnostic;
@@ -6272,6 +6333,10 @@ export default function ScorchedGame() {
       data-client-ready={clientReady ? "true" : "false"}
       data-stage-width={stageMetrics.width}
       data-stage-height={stageMetrics.height}
+      data-battlefield-profile={model.battlefieldProfile}
+      data-left-spawn-kind={model.battlefieldSpawnKinds[0]}
+      data-right-spawn-kind={model.battlefieldSpawnKinds[1]}
+      data-layout-override={model.battlefieldProfileOverride ?? "none"}
       data-testid="game-container"
     >
       <canvas
@@ -6297,7 +6362,8 @@ export default function ScorchedGame() {
           aria-label="Управление камерой"
         >
           <span className={styles.cameraMeta}>
-            Карта {model.terrain.width}×{model.terrain.height}
+            Карта {model.terrain.width}×{model.terrain.height} ·{" "}
+            {model.battlefieldProfile}
           </span>
           <button
             type="button"

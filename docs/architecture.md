@@ -139,6 +139,16 @@ CSS pixels, camera и logical world живёт в одном adapter. Текущ
 быстрого projectile через тонкий материал. Преждевременная фиксация 1:1 к
 физическому pixel телефона создаст разный баланс на разных экранах.
 
+Генерация battlefield разделена на planner и rasterizer. Чистый
+`BattlefieldPlan` выбирает `open`, `ridge`, `valley` или `cavern`, задаёт
+macro anchors и роли surface/cave для каждой стартовой позиции. Rasterizer
+строит material grid, после чего paired spawn solver и validator измеряют уже
+фактическую топологию. Surface shelf и cave floor используют разные операции:
+подземная площадка не очищает материал от верхней границы мира и сохраняет
+roof. До четырёх адресуемых seed попыток и детерминированный fallback
+исключают неограниченный поиск. Полный контракт и пороги приняты в
+[ADR 0007](decisions/0007-tactical-battlefield-layouts.md).
+
 ## 6. Детерминизм и данные оружия
 
 Команда хода содержит как минимум:
@@ -239,11 +249,13 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
    music/sample asset не нарушает процедурный SFX fallback;
 6. camera adapter поддерживает drag-pan, minimap, zoom и auto-follow поверх
    battlefield, который шире viewport;
-7. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
-8. performance trace на reference device остаётся обязательным до заявлений о
+7. planner distribution, macro topology и surface/cave spawn invariants
+   проверяются seed sweeps и полноразмерными fixtures;
+8. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
+9. performance trace на reference device остаётся обязательным до заявлений о
    производительности на физическом устройстве.
 
-Пункты 1–5 проверяются автоматикой, а пункт 6 — также browser smoke.
+Пункты 1–5 и 7 проверяются автоматикой, а пункты 6–7 — также browser smoke.
 Последние два нельзя считать подтверждёнными без реального устройства,
 прослушивания и trace.
 

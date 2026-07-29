@@ -7,8 +7,11 @@ import {
   VIEWPORT_WIDTH,
   WORLD_HEIGHT,
   WORLD_WIDTH,
+  battlefieldGridHash,
+  createBattlefieldPlan,
   generateBattlefield,
   generateTerrain,
+  type BattlefieldLayoutProfile,
 } from "../lib/game/index";
 
 function countSurfaceDetail(terrain: TerrainGrid): {
@@ -138,17 +141,51 @@ describe("large battlefield generation", () => {
     const replay = generateBattlefield("deterministic-caverns", options);
     const different = generateBattlefield("different-caverns", options);
 
+    expect(first.plan).toEqual(replay.plan);
+    expect(first.metadata).toEqual(replay.metadata);
     expect(first.spawns).toEqual(replay.spawns);
-    expect(first.terrain.cells).toEqual(replay.terrain.cells);
-    expect(first.terrain.cells).not.toEqual(different.terrain.cells);
+    expect(battlefieldGridHash(first.terrain)).toBe(
+      battlefieldGridHash(replay.terrain),
+    );
+    expect(battlefieldGridHash(first.terrain)).not.toBe(
+      battlefieldGridHash(different.terrain),
+    );
   });
 
-  it.each(["ridge-17", "vault-203", "burrow-991"])(
-    "places seed %s on distant safe shelves in opposite bands",
-    (seed) => {
+  it("keeps all four plan profiles represented and avoids a three-round repeat", () => {
+    const counts: Record<BattlefieldLayoutProfile, number> = {
+      open: 0,
+      ridge: 0,
+      valley: 0,
+      cavern: 0,
+    };
+
+    for (let seed = 0; seed < 512; seed += 1) {
+      const profiles = [1, 2, 3].map(
+        (roundNumber) =>
+          createBattlefieldPlan(seed, { roundNumber }).profile,
+      );
+      counts[profiles[0] as BattlefieldLayoutProfile] += 1;
+      expect(new Set(profiles).size).toBeGreaterThan(1);
+    }
+
+    for (const count of Object.values(counts)) {
+      expect(count).toBeGreaterThanOrEqual(Math.ceil(512 * 0.15));
+      expect(count).toBeLessThanOrEqual(512 * 0.5);
+    }
+  });
+
+  it.each([
+    ["open-shelf", "open"],
+    ["ridge-shelf", "ridge"],
+    ["valley-shelf", "valley"],
+  ] as const)(
+    "places seed %s on distant safe surface shelves for %s",
+    (seed, layoutProfile) => {
       const tankHalfHeight = 11;
       const padHalfWidth = 20;
       const battlefield = generateBattlefield(seed, {
+        layoutProfile,
         width: 1_200,
         height: 420,
         minSurfaceY: 150,
@@ -162,6 +199,9 @@ describe("large battlefield generation", () => {
       });
       const [left, right] = battlefield.spawns;
 
+      expect(battlefield.plan.profile).toBe(layoutProfile);
+      expect(left.kind).toBe("surface");
+      expect(right.kind).toBe("surface");
       expect(left.x).toBeLessThanOrEqual(battlefield.terrain.width * 0.33);
       expect(right.x).toBeGreaterThanOrEqual(battlefield.terrain.width * 0.67);
       expect(right.x - left.x).toBeGreaterThanOrEqual(624);
@@ -187,6 +227,137 @@ describe("large battlefield generation", () => {
       }
     },
   );
+
+  it.each([
+    ["cavern-fixture-0", "surface-vs-cave", ["surface", "cave"]],
+    ["cavern-fixture-1", "cave-vs-cave", ["cave", "cave"]],
+  ] as const)(
+    "creates a playable %s cavern layout for %s",
+    (seed, variant, expectedKinds) => {
+      const padHalfWidth = 24;
+      const tankHalfHeight = 11;
+      const battlefield = generateBattlefield(seed, {
+        layoutProfile: "cavern",
+        spawnPadHalfWidth: padHalfWidth,
+        tankHalfHeight,
+      });
+
+      expect(battlefield.plan.cavernVariant).toBe(variant);
+      expect(battlefield.spawns.map((spawn) => spawn.kind)).toEqual(
+        expectedKinds,
+      );
+      expect(battlefield.metadata.fallbackReason).toBeNull();
+
+      battlefield.spawns.forEach((spawn, index) => {
+        const supportY = spawn.y + tankHalfHeight;
+        const metadata = battlefield.metadata.spawns[index] as
+          | (typeof battlefield.metadata.spawns)[number]
+          | undefined;
+        expect(metadata).toBeDefined();
+        expect(metadata?.supportDepth).toBeGreaterThanOrEqual(12);
+
+        if (spawn.kind === "surface") {
+          expect(battlefield.terrain.surfaceY(spawn.x)).toBe(supportY);
+          expect(metadata?.openSky).toBe(true);
+          return;
+        }
+
+        expect(
+          battlefield.terrain.firstSolidYAtOrBelow(
+            spawn.x,
+            supportY - 1,
+          ),
+        ).toBe(supportY);
+        expect(battlefield.terrain.surfaceY(spawn.x)).toBeLessThan(
+          spawn.y,
+        );
+        expect(metadata?.headroom).toBeGreaterThanOrEqual(
+          tankHalfHeight * 3,
+        );
+        expect(metadata?.roofThickness).toBeGreaterThanOrEqual(
+          WORLD_HEIGHT * 0.035,
+        );
+        expect(metadata?.mouthConnected).toBe(true);
+        expect(metadata?.firingExit).toBe(true);
+
+        for (
+          let x = spawn.x - padHalfWidth;
+          x <= spawn.x + padHalfWidth;
+          x += 1
+        ) {
+          expect(
+            battlefield.terrain.firstSolidYAtOrBelow(x, supportY - 1),
+          ).toBe(supportY);
+        }
+      });
+    },
+  );
+
+  it.each([
+    "profile-a",
+    "profile-b",
+    "profile-c",
+  ])(
+    "preserves full-size tactical topology for fixture family %s",
+    (fixture) => {
+      for (const profile of [
+        "open",
+        "ridge",
+        "valley",
+        "cavern",
+      ] as const) {
+        const battlefield = generateBattlefield(`${fixture}-${profile}`, {
+          layoutProfile: profile,
+        });
+
+        expect(battlefield.plan.profile).toBe(profile);
+        expect(battlefield.metadata.fallbackReason).toBeNull();
+        expect(battlefield.metadata.attempt).toBeLessThanOrEqual(4);
+        expect(
+          battlefield.metadata.topology.horizontalSeparation,
+        ).toBeGreaterThanOrEqual(Math.round(WORLD_WIDTH * 0.56));
+
+        if (profile === "ridge") {
+          expect(battlefield.metadata.topology.ridgeHeight).toBeGreaterThanOrEqual(
+            WORLD_HEIGHT * 0.1,
+          );
+          expect(battlefield.metadata.topology.featureWidth).toBeGreaterThanOrEqual(
+            160,
+          );
+        } else if (profile === "valley") {
+          expect(battlefield.metadata.topology.basinDepth).toBeGreaterThanOrEqual(
+            WORLD_HEIGHT * 0.1,
+          );
+          expect(battlefield.metadata.topology.featureWidth).toBeGreaterThanOrEqual(
+            160,
+          );
+        } else if (profile === "cavern") {
+          expect(
+            battlefield.spawns.some((spawn) => spawn.kind === "cave"),
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
+  it("keeps retries bounded with a low deterministic fallback rate", () => {
+    let fallbackCount = 0;
+    let totalAttempts = 0;
+
+    for (let seed = 0; seed < 64; seed += 1) {
+      const battlefield = generateBattlefield(`retry-${seed}`, {
+        width: 960,
+        height: 360,
+      });
+      totalAttempts += battlefield.metadata.attempt;
+      if (battlefield.metadata.fallbackReason !== null) {
+        fallbackCount += 1;
+      }
+    }
+
+    expect(fallbackCount / 64).toBeLessThan(0.05);
+    expect(totalAttempts / 64).toBeLessThan(2);
+  });
 
   it.each(["caves-alpha", "caves-beta", "caves-gamma"])(
     "creates detailed surface, connected cave mouths and overhangs for %s",
