@@ -2146,3 +2146,686 @@
     transition: none;
   }
 }
+
+.activeMarker,
+.playerVitals {
+  display: none;
+}
+
+.loadoutTabs {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 2px;
+}
+
+.loadoutTabs button {
+  min-width: 96px;
+  min-height: 44px;
+  padding-inline: 16px;
+  border: 1px solid rgba(143, 203, 235, 0.2);
+  border-radius: 999px;
+  color: #a7bdca;
+  background: rgba(66, 195, 232, 0.07);
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.loadoutTabs button[aria-selected="true"] {
+  border-color: rgba(101, 224, 255, 0.68);
+  color: #f3fcff;
+  background: rgba(66, 195, 232, 0.18);
+}
+
+.mobileCombat {
+  border: 0;
+  border-radius: 0;
+  touch-action: none;
+}
+
+.mobileCombat .canvas {
+  object-fit: fill;
+}
+
+.mobileCombatStrip {
+  inset: 0 0 auto;
+  height: calc(48px + env(safe-area-inset-top));
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 48px;
+  align-items: stretch;
+  gap: 0;
+  padding:
+    env(safe-area-inset-top)
+    max(2px, env(safe-area-inset-right)) 0
+    max(2px, env(safe-area-inset-left));
+  border-bottom: 1px solid rgba(183, 207, 219, 0.16);
+  background: rgba(8, 12, 15, 0.9);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.mobileCombatStrip .playerHud,
+.mobileCombatStrip .roundHud {
+  height: 48px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.mobileCombatStrip .playerHud {
+  display: grid;
+  width: 100%;
+  align-content: center;
+  border-right: 1px solid rgba(183, 207, 219, 0.12);
+}
+
+.mobileCombatStrip .playerHud:nth-child(2) {
+  border-right: 0;
+  border-left: 1px solid rgba(183, 207, 219, 0.12);
+}
+
+.mobileCombatStrip .playerHudActive {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--player-color) 13%, transparent),
+      transparent 72%
+    );
+  box-shadow: inset 0 -2px var(--player-color);
+}
+
+.mobileCombatStrip .playerLine {
+  min-width: 0;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.mobileCombatStrip .playerIdentity {
+  gap: 4px;
+}
+
+.mobileCombatStrip .activeMarker {
+  display: inline;
+  flex: 0 0 9px;
+  color: var(--player-color);
+  font-size: 9px;
+}
+
+.mobileCombatStrip .playerDot {
+  display: none;
+}
+
+.mobileCombatStrip .playerName {
+  overflow: visible;
+  color: #f2f7f2;
+  font-size: 11px;
+  text-overflow: clip;
+}
+
+.mobileCombatStrip .playerVitals {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: #d5e2e5;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mobileCombatStrip .playerVitals strong:last-child {
+  color: #8fefff;
+}
+
+.mobileCombatStrip .money,
+.mobileCombatStrip .healthTrack,
+.mobileCombatStrip .shieldTrack,
+.mobileCombatStrip .meterLabels {
+  display: none;
+}
+
+.mobileCombatStrip .roundHud {
+  display: grid;
+  min-width: 98px;
+  grid-template-columns: auto auto;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 1px 7px;
+}
+
+.mobileCombatStrip .roundHud .eyebrow {
+  grid-column: 1 / -1;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.mobileCombatStrip .roundValue {
+  margin: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.mobileCombatStrip .windLine {
+  margin: 0;
+  gap: 2px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.mobileCombatStrip .windArrow {
+  font-size: 13px;
+}
+
+.mobileStripActions {
+  display: flex;
+  grid-column: 4;
+  grid-row: 1;
+  justify-content: flex-end;
+  pointer-events: auto;
+}
+
+.topPause,
+.audioWarning {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid rgba(183, 207, 219, 0.14);
+  color: #e9f2f4;
+  background: rgba(70, 91, 101, 0.08);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.audioWarning {
+  width: 32px;
+  flex-basis: 32px;
+  color: #ffd08c;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mobileCameraLayer {
+  pointer-events: none;
+}
+
+.cameraToggle {
+  position: absolute;
+  z-index: 8;
+  top: 50%;
+  right: max(4px, env(safe-area-inset-right));
+  display: grid;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(171, 219, 238, 0.28);
+  border-radius: 14px 0 0 14px;
+  color: #e8f7fc;
+  background: rgba(7, 16, 21, 0.84);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+  font-size: 20px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.cameraPopover {
+  position: absolute;
+  z-index: 7;
+  top: 54px;
+  right: calc(max(5px, env(safe-area-inset-right)) + 52px);
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  display: grid;
+  width: min(348px, calc(100% - 68px));
+  max-height: 132px;
+  align-content: start;
+  gap: 7px;
+  padding: 7px;
+  overflow: hidden;
+  border: 1px solid rgba(129, 199, 233, 0.28);
+  border-radius: 14px;
+  background: rgba(5, 12, 17, 0.94);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+
+.cameraPopoverActions {
+  display: grid;
+  grid-template-columns: repeat(5, 48px);
+  justify-content: end;
+  gap: 4px;
+}
+
+.cameraPopover .cameraButton {
+  width: 48px;
+  height: 48px;
+  flex-basis: 48px;
+}
+
+.mobileMinimap {
+  display: block;
+  width: 100%;
+  height: 58px;
+  border: 1px solid rgba(104, 229, 239, 0.22);
+  border-radius: 7px;
+  touch-action: none;
+}
+
+.mobileStatusToast {
+  top: auto;
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  max-width: min(72%, 560px);
+  min-height: 28px;
+  padding: 6px 11px;
+  color: #d5edf5;
+  background: rgba(5, 13, 18, 0.86);
+  font-size: 11px;
+  letter-spacing: 0;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.mobileStatusToastHidden {
+  opacity: 0;
+  transform: translate(-50%, 5px);
+}
+
+.mobileActionRail {
+  position: absolute;
+  z-index: 6;
+  inset: auto 0 0;
+  display: grid;
+  height: calc(64px + env(safe-area-inset-bottom));
+  grid-template-columns:
+    auto auto minmax(82px, 1fr)
+    92px;
+  align-items: center;
+  gap: 4px;
+  padding:
+    4px max(4px, env(safe-area-inset-right))
+    max(4px, env(safe-area-inset-bottom))
+    max(4px, env(safe-area-inset-left));
+  border-top: 1px solid rgba(183, 207, 219, 0.18);
+  background: rgba(8, 12, 15, 0.92);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.mobileActionRailShowcase {
+  grid-template-columns:
+    auto auto minmax(82px, 1fr) 48px
+    92px;
+}
+
+.mobileAimStepper {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 48px minmax(48px, 52px) 48px;
+  align-items: center;
+  gap: 0;
+}
+
+.mobileStepButton,
+.mobileAimValue,
+.precisionStep,
+.precisionDone {
+  min-width: 48px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid rgba(171, 219, 238, 0.18);
+  color: #ecf8fb;
+  background: rgba(73, 112, 130, 0.11);
+  cursor: pointer;
+}
+
+.mobileStepButton:first-child {
+  border-radius: 12px 0 0 12px;
+}
+
+.mobileStepButton:last-child {
+  border-radius: 0 12px 12px 0;
+}
+
+.mobileStepButton {
+  font-size: 21px;
+}
+
+.mobileAimValue {
+  min-width: 48px;
+  border-inline: 0;
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.mobileLoadoutChip,
+.mobileShieldChip {
+  height: 56px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid
+    color-mix(in srgb, var(--weapon-color) 42%, rgba(143, 203, 235, 0.16));
+  border-radius: 12px;
+  color: #eef8fa;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--weapon-color) 15%, transparent),
+      transparent 72%
+    ),
+    rgba(31, 46, 53, 0.52);
+  cursor: pointer;
+}
+
+.mobileLoadoutChip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: 1fr 1fr;
+  align-items: center;
+  column-gap: 5px;
+  text-align: left;
+}
+
+.mobileLoadoutChip > span {
+  grid-row: 1 / 3;
+  color: var(--weapon-color);
+  font-size: 18px;
+}
+
+.mobileLoadoutChip strong {
+  align-self: end;
+  overflow: visible;
+  font-size: 11px;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.mobileLoadoutChip small {
+  align-self: start;
+  color: #afc4cd;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mobileShieldChip {
+  --weapon-color: var(--shield-color);
+  display: grid;
+  width: 48px;
+  padding-inline: 2px;
+  place-items: center;
+  gap: 1px;
+}
+
+.mobileShieldChip span {
+  color: var(--shield-color);
+  font-size: 17px;
+}
+
+.mobileShieldChip strong {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mobileFireButton {
+  --hold-progress: 0%;
+  position: relative;
+  display: grid;
+  width: 84px;
+  min-width: 84px;
+  height: 56px;
+  margin-left: 8px;
+  overflow: hidden;
+  place-content: center;
+  border: 1px solid rgba(255, 175, 70, 0.75);
+  border-radius: 13px;
+  color: #171008;
+  background: linear-gradient(145deg, #ffe071, #ff9e3e 62%, #ff704e);
+  box-shadow:
+    0 7px 20px rgba(255, 126, 42, 0.24),
+    inset 0 1px rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.mobileFireButton::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0 auto 0 0;
+  width: var(--hold-progress);
+  background: rgba(255, 255, 255, 0.48);
+  content: "";
+}
+
+.mobileFireButtonHolding {
+  animation: none;
+}
+
+.mobileFireButtonHolding::before {
+  animation: mobile-fire-hold 350ms linear forwards;
+}
+
+.mobileFireButton span,
+.mobileFireButton strong {
+  position: relative;
+  z-index: 1;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.mobileFireButton span {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mobileFireButton strong {
+  margin-top: 3px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+.mobileStepButton:disabled,
+.mobileAimValue:disabled,
+.mobileLoadoutChip:disabled,
+.mobileShieldChip:disabled,
+.mobileFireButton:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.precisionTray {
+  position: absolute;
+  z-index: 7;
+  right: max(4px, env(safe-area-inset-right));
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  left: max(4px, env(safe-area-inset-left));
+  display: grid;
+  height: 64px;
+  grid-template-columns: 48px 54px minmax(0, 1fr) 48px 72px;
+  align-items: center;
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid rgba(129, 199, 233, 0.24);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  background: rgba(6, 13, 18, 0.96);
+  box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.36);
+}
+
+.precisionStep {
+  height: 48px;
+  border-radius: 11px;
+  font-size: 20px;
+}
+
+.precisionValue {
+  color: #fff;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.precisionSlider {
+  width: 100%;
+  min-width: 0;
+  height: 48px;
+  margin: 0;
+  accent-color: #68e5ef;
+}
+
+.precisionDone {
+  min-width: 72px;
+  height: 48px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.browserPanelsGate {
+  position: absolute;
+  z-index: 9;
+  inset: calc(48px + env(safe-area-inset-top)) 0 0;
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  padding: 12px;
+  color: #eef7f7;
+  background: rgba(6, 10, 12, 0.94);
+  text-align: center;
+}
+
+.browserPanelsGate strong {
+  font-size: 18px;
+}
+
+.browserPanelsGate span {
+  color: #a8b8ba;
+  font-size: 11px;
+}
+
+.mobileCombat .weaponDialog {
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+}
+
+.mobileCombat .weaponDialogShell {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  padding:
+    max(6px, env(safe-area-inset-top))
+    max(8px, env(safe-area-inset-right))
+    max(7px, env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-left));
+}
+
+.mobileCombat .shieldDialogShell {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.mobileCombat .weaponDialogHeader {
+  position: relative;
+}
+
+.mobileCombat .weaponDialogClose {
+  width: 48px;
+  height: 48px;
+}
+
+.mobileCombat .loadoutTabs {
+  margin-block: 4px;
+}
+
+.mobileCombat .loadoutTabs button,
+.mobileCombat .weaponFilter {
+  min-height: 48px;
+}
+
+.mobileCombat .weaponFilterRow {
+  margin-block: 4px;
+}
+
+.mobileCombat .weaponGrid {
+  overscroll-behavior: contain;
+}
+
+.mobileCombat .shieldGrid {
+  margin-top: 4px;
+}
+
+@keyframes mobile-fire-hold {
+  from {
+    width: 0;
+  }
+
+  to {
+    width: 100%;
+  }
+}
+
+@media (max-width: 740px) and (orientation: landscape) {
+  .mobileCombatStrip {
+    grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr) 48px;
+  }
+
+  .mobileCombatStrip .playerHud {
+    padding-inline: 4px;
+  }
+
+  .mobileCombatStrip .roundHud {
+    min-width: 88px;
+    padding-inline: 3px;
+    gap: 1px 4px;
+  }
+
+  .mobileActionRail,
+  .mobileActionRailShowcase {
+    grid-template-columns:
+      auto auto minmax(76px, 1fr)
+      92px;
+  }
+
+  .mobileActionRailShowcase {
+    grid-template-columns:
+      auto auto minmax(76px, 1fr) 48px
+      92px;
+  }
+
+  .mobileAimStepper {
+    grid-template-columns: 48px 48px 48px;
+  }
+
+  .mobileLoadoutChip {
+    padding-inline: 5px;
+  }
+
+  .mobileLoadoutChip > span {
+    display: none;
+  }
+
+  .mobileLoadoutChip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobileStatusToast {
+    transition: none;
+  }
+}

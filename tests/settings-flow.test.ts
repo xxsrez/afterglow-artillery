@@ -16,13 +16,13 @@ describe("settings flow", () => {
     );
   });
 
-  it("opens match settings only from a stable aiming turn", () => {
+  it("opens match settings from aiming or a paused flight", () => {
     expect(
       transitionSettingsScreen("closed", "open-settings", "aiming"),
     ).toBe("match");
     expect(
       transitionSettingsScreen("closed", "open-settings", "firing"),
-    ).toBe("closed");
+    ).toBe("match");
     expect(
       transitionSettingsScreen("closed", "open-settings", "roundEnd"),
     ).toBe("closed");

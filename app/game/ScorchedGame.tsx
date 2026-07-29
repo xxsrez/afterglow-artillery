@@ -91,13 +91,13 @@ import {
 import {
   averagePoints,
   clampCamera,
-  clientPointToContainedViewport,
   createCamera,
   flightFocusPoint,
   moveCameraToward,
   panCameraByScreenDelta,
   zoomCameraAtScreenPoint,
   type CameraState,
+  type CameraViewport,
 } from "./camera";
 import {
   angleDeltaForScreenDirection,
@@ -149,6 +149,15 @@ import {
   weaponsForSelectorFilter,
   type WeaponSelectorFilterId,
 } from "./weapon-selector";
+import {
+  MOBILE_COMBAT_MIN_HEIGHT,
+  MOBILE_FIRE_HOLD_MS,
+  cameraCenterForOccludedTarget,
+  clientPointToViewport,
+  isMobileCombatViewport,
+  pointInsideRect,
+  type CombatViewport,
+} from "./mobile-combat";
 import styles from "./ScorchedGame.module.css";
 
 const TOTAL_ROUNDS = 3;
@@ -283,18 +292,31 @@ interface CameraGesture {
   readonly pointers: Map<number, Vector2>;
   pinchDistance: number | null;
   pinchMidpoint: Vector2 | null;
-  minimapPointerId: number | null;
 }
 
-const CAMERA_VIEWPORT = {
+interface FireHoldState {
+  pointerId: number | null;
+  timer: number | null;
+  completed: boolean;
+}
+
+const REFERENCE_CAMERA_VIEWPORT = {
   width: VIEWPORT_WIDTH,
   height: VIEWPORT_HEIGHT,
 } as const;
-const MINIMAP_BOUNDS = {
-  x: VIEWPORT_WIDTH / 2 - 145,
-  y: 119,
-  width: 290,
-  height: 58,
+const MINIMAP_CACHE_WIDTH = 290;
+const MINIMAP_CACHE_HEIGHT = 58;
+const MOBILE_AIMING_OCCLUSION = {
+  top: 48,
+  right: 0,
+  bottom: 64,
+  left: 0,
+} as const;
+const NO_CAMERA_OCCLUSION = {
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
 } as const;
 
 const clamp = (value: number, min: number, max: number) =>
@@ -387,46 +409,36 @@ function canvasPointFromClient(
   canvas: HTMLCanvasElement,
   clientX: number,
   clientY: number,
+  viewport: CameraViewport,
 ): Vector2 {
-  return clientPointToContainedViewport(
-    { x: clientX, y: clientY },
+  return clientPointToViewport(
+    clientX,
+    clientY,
     canvas.getBoundingClientRect(),
-    CAMERA_VIEWPORT,
+    viewport,
   );
-}
-
-function pointInsideMinimap(point: Vector2): boolean {
-  return (
-    point.x >= MINIMAP_BOUNDS.x &&
-    point.x <= MINIMAP_BOUNDS.x + MINIMAP_BOUNDS.width &&
-    point.y >= MINIMAP_BOUNDS.y &&
-    point.y <= MINIMAP_BOUNDS.y + MINIMAP_BOUNDS.height
-  );
-}
-
-function minimapPointToWorld(
-  point: Vector2,
-  terrain: TerrainGrid,
-): Vector2 {
-  return {
-    x:
-      ((point.x - MINIMAP_BOUNDS.x) / MINIMAP_BOUNDS.width) *
-      terrain.width,
-    y:
-      ((point.y - MINIMAP_BOUNDS.y) / MINIMAP_BOUNDS.height) *
-      terrain.height,
-  };
 }
 
 function cameraWorldForTerrain(terrain: TerrainGrid) {
   return { width: terrain.width, height: terrain.height };
 }
 
-function cameraTargetForTank(tank: PlayerTank): Vector2 {
-  return {
+function cameraTargetForTank(
+  tank: PlayerTank,
+  viewport: CameraViewport = REFERENCE_CAMERA_VIEWPORT,
+  mobileAiming = false,
+  zoom = 1,
+): Vector2 {
+  const target = {
     x: tank.x,
     y: tank.y - 72,
   };
+  return cameraCenterForOccludedTarget(
+    target,
+    viewport,
+    mobileAiming ? MOBILE_AIMING_OCCLUSION : NO_CAMERA_OCCLUSION,
+    zoom,
+  );
 }
 
 function initialInventory(): Partial<Record<WeaponId, number>> {
@@ -2133,11 +2145,11 @@ function renderTerrain(
 
   const minimap = cached?.minimap ?? document.createElement("canvas");
   const minimapDimensionsChanged =
-    minimap.width !== MINIMAP_BOUNDS.width ||
-    minimap.height !== MINIMAP_BOUNDS.height;
+    minimap.width !== MINIMAP_CACHE_WIDTH ||
+    minimap.height !== MINIMAP_CACHE_HEIGHT;
   if (minimapDimensionsChanged) {
-    minimap.width = MINIMAP_BOUNDS.width;
-    minimap.height = MINIMAP_BOUNDS.height;
+    minimap.width = MINIMAP_CACHE_WIDTH;
+    minimap.height = MINIMAP_CACHE_HEIGHT;
   }
   const minimapContext = minimap.getContext("2d");
   if (minimapContext) {
@@ -2217,20 +2229,21 @@ function drawBackdrop(
   context: CanvasRenderingContext2D,
   now: number,
   camera: CameraState,
+  viewport: CameraViewport,
 ): void {
-  const sky = context.createLinearGradient(0, 0, 0, VIEWPORT_HEIGHT);
+  const sky = context.createLinearGradient(0, 0, 0, viewport.height);
   sky.addColorStop(0, "#07090a");
   sky.addColorStop(0.58, "#101719");
   sky.addColorStop(1, "#1b1d18");
   context.fillStyle = sky;
-  context.fillRect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  context.fillRect(0, 0, viewport.width, viewport.height);
 
   context.save();
   context.globalAlpha = 0.25;
   for (let index = 0; index < 56; index += 1) {
     const x =
       ((index * 173 + 41 - camera.center.x * 0.14) %
-        (VIEWPORT_WIDTH + 140)) -
+        (viewport.width + 140)) -
       70;
     const y =
       ((index * 71 + 27 - camera.center.y * 0.025) % 250) - 6;
@@ -2242,7 +2255,9 @@ function drawBackdrop(
   context.restore();
 
   const glowCenterX =
-    ((760 - camera.center.x * 0.08) % (VIEWPORT_WIDTH + 260)) - 80;
+    ((viewport.width * 0.79 - camera.center.x * 0.08) %
+      (viewport.width + 260)) -
+    80;
   const glow = context.createRadialGradient(
     glowCenterX,
     92,
@@ -2262,41 +2277,42 @@ function drawBackdrop(
   const gridOffset = -(camera.center.x * 0.08) % 48;
   for (
     let x = gridOffset - 48;
-    x <= VIEWPORT_WIDTH + 48;
+    x <= viewport.width + 48;
     x += 48
   ) {
     context.beginPath();
     context.moveTo(x, 0);
-    context.lineTo(x, VIEWPORT_HEIGHT);
+    context.lineTo(x, viewport.height);
     context.stroke();
   }
 }
 
 function drawMinimap(
-  context: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
   terrainOverview: HTMLCanvasElement,
   model: GameModel,
   camera: CameraState,
+  viewport: CameraViewport,
 ): void {
-  const { x, y, width, height } = MINIMAP_BOUNDS;
+  const width = MINIMAP_CACHE_WIDTH;
+  const height = MINIMAP_CACHE_HEIGHT;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const x = 0;
+  const y = 0;
   const scaleX = width / model.terrain.width;
   const scaleY = height / model.terrain.height;
-  const visibleWidth = VIEWPORT_WIDTH / camera.zoom;
-  const visibleHeight = VIEWPORT_HEIGHT / camera.zoom;
+  const visibleWidth = viewport.width / camera.zoom;
+  const visibleHeight = viewport.height / camera.zoom;
 
   context.save();
-  context.shadowColor = "rgba(0, 0, 0, 0.42)";
-  context.shadowBlur = 14;
-  context.fillStyle = "rgba(5, 13, 18, 0.84)";
-  context.beginPath();
-  context.roundRect(x - 5, y - 5, width + 10, height + 10, 9);
-  context.fill();
-  context.shadowBlur = 0;
-
-  context.save();
-  context.beginPath();
-  context.roundRect(x, y, width, height, 5);
-  context.clip();
+  context.clearRect(0, 0, width, height);
   context.fillStyle = "#11191b";
   context.fillRect(x, y, width, height);
   context.globalAlpha = 0.86;
@@ -2324,13 +2340,10 @@ function drawMinimap(
     visibleWidth * scaleX,
     visibleHeight * scaleY,
   );
-  context.restore();
 
   context.strokeStyle = "rgba(104, 229, 239, 0.5)";
   context.lineWidth = 1;
-  context.beginPath();
-  context.roundRect(x - 5, y - 5, width + 10, height + 10, 9);
-  context.stroke();
+  context.strokeRect(0.5, 0.5, width - 1, height - 1);
   context.restore();
 }
 
@@ -3814,7 +3827,14 @@ function causesTerrainCollapse(shot: ShotVisual): boolean {
 }
 
 export default function ScorchedGame() {
+  const gameContainerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fireButtonRef = useRef<HTMLButtonElement | null>(null);
+  const viewportRef = useRef<CombatViewport>({
+    ...REFERENCE_CAMERA_VIEWPORT,
+    dpr: 1,
+  });
   const terrainCacheRef = useRef<TerrainCache | null>(null);
   const gameRef = useRef<GameModel>(null!);
   if (gameRef.current === null) {
@@ -3826,7 +3846,7 @@ export default function ScorchedGame() {
       cameraTargetForTank(
         gameRef.current.tanks[gameRef.current.activePlayer],
       ),
-      CAMERA_VIEWPORT,
+      REFERENCE_CAMERA_VIEWPORT,
       cameraWorldForTerrain(gameRef.current.terrain),
     );
   }
@@ -3835,8 +3855,16 @@ export default function ScorchedGame() {
     pointers: new Map(),
     pinchDistance: null,
     pinchMidpoint: null,
-    minimapPointerId: null,
   });
+  const minimapPointerRef = useRef<number | null>(null);
+  const fireHoldRef = useRef<FireHoldState>({
+    pointerId: null,
+    timer: null,
+    completed: false,
+  });
+  const settingsOpenRef = useRef(false);
+  const suppressFireClickRef = useRef(false);
+  const fireReleaseGatePointerRef = useRef<number | null>(null);
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const particlePoolRef = useRef<Particle[]>([]);
@@ -3862,11 +3890,26 @@ export default function ScorchedGame() {
     useState<WeaponSelectorFilterId>("all");
   const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
   const [shieldSelectorOpen, setShieldSelectorOpen] = useState(false);
+  const [precisionControl, setPrecisionControl] = useState<
+    "angle" | "power" | null
+  >(null);
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
+  const [fireHolding, setFireHolding] = useState(false);
+  const [statusToastVisible, setStatusToastVisible] = useState(true);
+  const [clientReady, setClientReady] = useState(false);
+  const [stageMetrics, setStageMetrics] = useState({
+    width: VIEWPORT_WIDTH,
+    height: VIEWPORT_HEIGHT,
+  });
   const [settingsScreen, setSettingsScreen] =
     useState<SettingsScreen>("start");
 
   const model = gameRef.current;
   const settingsOpen = settingsScreen === "match";
+  settingsOpenRef.current = settingsOpen;
+  const mobileCombat = isMobileCombatViewport(stageMetrics);
+  const stageTooShort =
+    mobileCombat && stageMetrics.height < MOBILE_COMBAT_MIN_HEIGHT;
   const infiniteArsenal = isInfiniteArsenalMode(model.mode);
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
@@ -3878,8 +3921,9 @@ export default function ScorchedGame() {
   const selectedPlayableId: PlayableWeaponId =
     selectedExperimentalDefinition?.id ?? selectedWeapon;
   const selectedPlayable = selectedExperimentalDefinition
-    ? {
+      ? {
         name: selectedExperimentalDefinition.name,
+        shortName: selectedExperimentalDefinition.shortName,
         icon: selectedExperimentalDefinition.icon,
         accent: selectedExperimentalDefinition.accent,
         role: "Experimental Ultimate",
@@ -3888,6 +3932,7 @@ export default function ScorchedGame() {
       }
     : {
         name: selectedWeaponDefinition.name,
+        shortName: selectedWeaponDefinition.shortName,
         icon: selectedWeaponDefinition.icon,
         accent: selectedWeaponDefinition.accent,
         role: weaponCatalogSubtitle(selectedWeaponDefinition),
@@ -3899,7 +3944,18 @@ export default function ScorchedGame() {
         count: "Арсенал 33",
       };
   const activeShieldDefinition = getShield(activeTank.shieldId);
+  const activePowerMax = Math.max(
+    260,
+    Math.round(1_000 * (activeTank.health / activeTank.maxHealth)),
+  );
+  const transientLayerOpen =
+    precisionControl !== null ||
+    weaponSelectorOpen ||
+    shieldSelectorOpen ||
+    cameraPanelOpen;
   const controlsLocked = model.phase !== "aiming" || settingsOpen;
+  const mobileFireLocked =
+    controlsLocked || transientLayerOpen || stageTooShort;
   const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
   const selectorExperimental =
     infiniteArsenal &&
@@ -3916,12 +3972,112 @@ export default function ScorchedGame() {
     setRevision((revision) => revision + 1);
   }, []);
 
+  useEffect(() => {
+    setClientReady(true);
+  }, []);
+
+  useEffect(() => {
+    const releaseGate = (event: PointerEvent) => {
+      if (fireReleaseGatePointerRef.current !== event.pointerId) {
+        return;
+      }
+      fireReleaseGatePointerRef.current = null;
+      window.setTimeout(() => {
+        suppressFireClickRef.current = false;
+      }, 0);
+    };
+    window.addEventListener("pointerup", releaseGate, true);
+    window.addEventListener("pointercancel", releaseGate, true);
+    return () => {
+      window.removeEventListener("pointerup", releaseGate, true);
+      window.removeEventListener("pointercancel", releaseGate, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = gameContainerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) {
+      return;
+    }
+
+    const measure = () => {
+      const rect = container.getBoundingClientRect();
+      const visualViewport = window.visualViewport;
+      const width = Math.max(
+        1,
+        Math.round(
+          Math.min(rect.width, visualViewport?.width ?? rect.width),
+        ),
+      );
+      const height = Math.max(
+        1,
+        Math.round(
+          Math.min(rect.height, visualViewport?.height ?? rect.height),
+        ),
+      );
+      const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
+      const backingWidth = Math.max(1, Math.round(width * dpr));
+      const backingHeight = Math.max(1, Math.round(height * dpr));
+      const changed =
+        canvas.width !== backingWidth ||
+        canvas.height !== backingHeight;
+
+      viewportRef.current = { width, height, dpr };
+      container.style.setProperty("--game-width", `${width}px`);
+      container.style.setProperty("--game-height", `${height}px`);
+      if (changed) {
+        canvas.width = backingWidth;
+        canvas.height = backingHeight;
+      }
+      cameraRef.current = clampCamera(
+        cameraRef.current,
+        viewportRef.current,
+        cameraWorldForTerrain(gameRef.current.terrain),
+      );
+      setStageMetrics((previous) =>
+        previous.width === width && previous.height === height
+          ? previous
+          : { width, height },
+      );
+    };
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    window.visualViewport?.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("scroll", measure);
+    window.addEventListener("orientationchange", measure);
+    measure();
+
+    return () => {
+      observer.disconnect();
+      window.visualViewport?.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("scroll", measure);
+      window.removeEventListener("orientationchange", measure);
+    };
+  }, []);
+
+  useEffect(() => {
+    setStatusToastVisible(true);
+    const timeout = window.setTimeout(
+      () => setStatusToastVisible(false),
+      2_000,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [model.message, model.phase]);
+
   const recenterCamera = useCallback(() => {
     const game = gameRef.current;
+    const viewport = viewportRef.current;
     cameraModeRef.current = "auto";
     cameraRef.current = createCamera(
-      cameraTargetForTank(game.tanks[game.activePlayer]),
-      CAMERA_VIEWPORT,
+      cameraTargetForTank(
+        game.tanks[game.activePlayer],
+        viewport,
+        isMobileCombatViewport(viewport),
+        cameraRef.current.zoom,
+      ),
+      viewport,
       cameraWorldForTerrain(game.terrain),
       cameraRef.current.zoom,
     );
@@ -3929,29 +4085,31 @@ export default function ScorchedGame() {
 
   const panCameraPage = useCallback((direction: -1 | 1) => {
     const game = gameRef.current;
+    const viewport = viewportRef.current;
     cameraModeRef.current = "manual";
     cameraRef.current = panCameraByScreenDelta(
       cameraRef.current,
       {
-        x: -direction * VIEWPORT_WIDTH * 0.68,
+        x: -direction * viewport.width * 0.68,
         y: 0,
       },
-      CAMERA_VIEWPORT,
+      viewport,
       cameraWorldForTerrain(game.terrain),
     );
   }, []);
 
   const changeCameraZoom = useCallback((factor: number) => {
     const game = gameRef.current;
+    const viewport = viewportRef.current;
     cameraModeRef.current = "manual";
     cameraRef.current = zoomCameraAtScreenPoint(
       cameraRef.current,
       cameraRef.current.zoom * factor,
       {
-        x: VIEWPORT_WIDTH / 2,
-        y: VIEWPORT_HEIGHT / 2,
+        x: viewport.width / 2,
+        y: viewport.height / 2,
       },
-      CAMERA_VIEWPORT,
+      viewport,
       cameraWorldForTerrain(game.terrain),
     );
   }, []);
@@ -3961,31 +4119,27 @@ export default function ScorchedGame() {
       if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
+      if (precisionControl !== null || cameraPanelOpen) {
+        event.preventDefault();
+        setPrecisionControl(null);
+        setCameraPanelOpen(false);
+        suppressFireClickRef.current = true;
+        fireReleaseGatePointerRef.current = event.pointerId;
+        return;
+      }
 
       const canvas = event.currentTarget;
+      const viewport = viewportRef.current;
       const point = canvasPointFromClient(
         canvas,
         event.clientX,
         event.clientY,
+        viewport,
       );
       const gesture = pointerGestureRef.current;
 
       canvas.setPointerCapture(event.pointerId);
       cameraModeRef.current = "manual";
-
-      if (pointInsideMinimap(point)) {
-        gesture.minimapPointerId = event.pointerId;
-        const terrain = gameRef.current.terrain;
-        cameraRef.current = clampCamera(
-          {
-            center: minimapPointToWorld(point, terrain),
-            zoom: cameraRef.current.zoom,
-          },
-          CAMERA_VIEWPORT,
-          cameraWorldForTerrain(terrain),
-        );
-        return;
-      }
 
       gesture.pointers.set(event.pointerId, point);
       const points = [...gesture.pointers.values()];
@@ -4000,31 +4154,21 @@ export default function ScorchedGame() {
         );
       }
     },
-    [],
+    [cameraPanelOpen, precisionControl],
   );
 
   const handleCanvasPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const gesture = pointerGestureRef.current;
+      const viewport = viewportRef.current;
       const point = canvasPointFromClient(
         event.currentTarget,
         event.clientX,
         event.clientY,
+        viewport,
       );
       const terrain = gameRef.current.terrain;
       const world = cameraWorldForTerrain(terrain);
-
-      if (gesture.minimapPointerId === event.pointerId) {
-        cameraRef.current = clampCamera(
-          {
-            center: minimapPointToWorld(point, terrain),
-            zoom: cameraRef.current.zoom,
-          },
-          CAMERA_VIEWPORT,
-          world,
-        );
-        return;
-      }
 
       const previous = gesture.pointers.get(event.pointerId);
       if (!previous) {
@@ -4042,7 +4186,7 @@ export default function ScorchedGame() {
             x: point.x - previous.x,
             y: point.y - previous.y,
           },
-          CAMERA_VIEWPORT,
+          viewport,
           world,
         );
         return;
@@ -4062,14 +4206,14 @@ export default function ScorchedGame() {
             x: midpoint.x - previousMidpoint.x,
             y: midpoint.y - previousMidpoint.y,
           },
-          CAMERA_VIEWPORT,
+          viewport,
           world,
         );
         cameraRef.current = zoomCameraAtScreenPoint(
           panned,
           panned.zoom * (distance / previousDistance),
           midpoint,
-          CAMERA_VIEWPORT,
+          viewport,
           world,
         );
       }
@@ -4084,9 +4228,6 @@ export default function ScorchedGame() {
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const gesture = pointerGestureRef.current;
       gesture.pointers.delete(event.pointerId);
-      if (gesture.minimapPointerId === event.pointerId) {
-        gesture.minimapPointerId = null;
-      }
       if (gesture.pointers.size < 2) {
         gesture.pinchDistance = null;
         gesture.pinchMidpoint = null;
@@ -4103,10 +4244,12 @@ export default function ScorchedGame() {
       event.preventDefault();
       const terrain = gameRef.current.terrain;
       const world = cameraWorldForTerrain(terrain);
+      const viewport = viewportRef.current;
       const point = canvasPointFromClient(
         event.currentTarget,
         event.clientX,
         event.clientY,
+        viewport,
       );
       cameraModeRef.current = "manual";
 
@@ -4115,7 +4258,7 @@ export default function ScorchedGame() {
           cameraRef.current,
           cameraRef.current.zoom * Math.exp(-event.deltaY * 0.0025),
           point,
-          CAMERA_VIEWPORT,
+          viewport,
           world,
         );
         return;
@@ -4127,7 +4270,7 @@ export default function ScorchedGame() {
           x: -(event.shiftKey ? event.deltaY : event.deltaX),
           y: -(event.shiftKey ? 0 : event.deltaY),
         },
-        CAMERA_VIEWPORT,
+        viewport,
         world,
       );
     },
@@ -4308,6 +4451,111 @@ export default function ScorchedGame() {
     };
   }, [refresh]);
 
+  const cancelMobileFireHold = useCallback(() => {
+    const hold = fireHoldRef.current;
+    if (hold.timer !== null) {
+      window.clearTimeout(hold.timer);
+    }
+    if (
+      hold.pointerId !== null &&
+      fireButtonRef.current?.hasPointerCapture(hold.pointerId)
+    ) {
+      fireButtonRef.current.releasePointerCapture(hold.pointerId);
+    }
+    fireHoldRef.current = {
+      pointerId: null,
+      timer: null,
+      completed: false,
+    };
+    setFireHolding(false);
+  }, []);
+
+  const openPrecisionTray = useCallback(
+    (control: "angle" | "power") => {
+      cancelMobileFireHold();
+      setCameraPanelOpen(false);
+      setPrecisionControl((current) =>
+        current === control ? null : control,
+      );
+    },
+    [cancelMobileFireHold],
+  );
+
+  const toggleCameraPanel = useCallback(() => {
+    cancelMobileFireHold();
+    setPrecisionControl(null);
+    setCameraPanelOpen((open) => !open);
+  }, [cancelMobileFireHold]);
+
+  const moveCameraFromMinimap = useCallback(
+    (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      const game = gameRef.current;
+      const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      const y = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+      cameraModeRef.current = "manual";
+      cameraRef.current = clampCamera(
+        {
+          center: {
+            x: x * game.terrain.width,
+            y: y * game.terrain.height,
+          },
+          zoom: cameraRef.current.zoom,
+        },
+        viewportRef.current,
+        cameraWorldForTerrain(game.terrain),
+      );
+    },
+    [],
+  );
+
+  const handleMinimapPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      minimapPointerRef.current = event.pointerId;
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // An interrupted browser gesture may end before pointer capture.
+      }
+      moveCameraFromMinimap(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+      );
+    },
+    [moveCameraFromMinimap],
+  );
+
+  const handleMinimapPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (minimapPointerRef.current !== event.pointerId) {
+        return;
+      }
+      moveCameraFromMinimap(
+        event.currentTarget,
+        event.clientX,
+        event.clientY,
+      );
+    },
+    [moveCameraFromMinimap],
+  );
+
+  const releaseMinimapPointer = useCallback(
+    (event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (minimapPointerRef.current === event.pointerId) {
+        minimapPointerRef.current = null;
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+
   const focusAfterWeaponSelectorClose = useCallback(
     (outcome: SelectorCloseOutcome) =>
       scheduleSelectorFocus(outcome, {
@@ -4319,7 +4567,12 @@ export default function ScorchedGame() {
 
   const closeWeaponSelector = useCallback(
     (outcome: SelectorCloseOutcome = "cancelled") => {
+      cancelMobileFireHold();
       setWeaponSelectorOpen(false);
+      suppressFireClickRef.current = true;
+      window.setTimeout(() => {
+        suppressFireClickRef.current = false;
+      }, 0);
       weaponCloseOutcomeRef.current = outcome;
       if (weaponDialogRef.current?.open) {
         weaponDialogRef.current.close();
@@ -4329,7 +4582,11 @@ export default function ScorchedGame() {
       focusAfterWeaponSelectorClose(outcome);
       playUiAudio("selector-close");
     },
-    [focusAfterWeaponSelectorClose, playUiAudio],
+    [
+      cancelMobileFireHold,
+      focusAfterWeaponSelectorClose,
+      playUiAudio,
+    ],
   );
 
   const focusAfterShieldSelectorClose = useCallback(
@@ -4343,7 +4600,12 @@ export default function ScorchedGame() {
 
   const closeShieldSelector = useCallback(
     (outcome: SelectorCloseOutcome = "cancelled") => {
+      cancelMobileFireHold();
       setShieldSelectorOpen(false);
+      suppressFireClickRef.current = true;
+      window.setTimeout(() => {
+        suppressFireClickRef.current = false;
+      }, 0);
       shieldCloseOutcomeRef.current = outcome;
       if (shieldDialogRef.current?.open) {
         shieldDialogRef.current.close();
@@ -4353,20 +4615,29 @@ export default function ScorchedGame() {
       focusAfterShieldSelectorClose(outcome);
       playUiAudio("selector-close");
     },
-    [focusAfterShieldSelectorClose, playUiAudio],
+    [
+      cancelMobileFireHold,
+      focusAfterShieldSelectorClose,
+      playUiAudio,
+    ],
   );
 
   const resetTransientSelectorsForTurnChange = useCallback(() => {
+    cancelMobileFireHold();
+    suppressFireClickRef.current = false;
+    fireReleaseGatePointerRef.current = null;
     setWeaponSelectorOpen(false);
     setWeaponSelectorFilter("all");
     setShieldSelectorOpen(false);
+    setPrecisionControl(null);
+    setCameraPanelOpen(false);
     if (weaponDialogRef.current?.open) {
       weaponDialogRef.current.close();
     }
     if (shieldDialogRef.current?.open) {
       shieldDialogRef.current.close();
     }
-  }, []);
+  }, [cancelMobileFireHold]);
 
   const openWeaponSelector = useCallback(() => {
     const game = gameRef.current;
@@ -4378,13 +4649,16 @@ export default function ScorchedGame() {
       return;
     }
     setShieldSelectorOpen(false);
+    setPrecisionControl(null);
+    setCameraPanelOpen(false);
+    cancelMobileFireHold();
     if (shieldDialogRef.current?.open) {
       shieldDialogRef.current.close();
     }
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [playUiAudio, settingsOpen]);
+  }, [cancelMobileFireHold, playUiAudio, settingsOpen]);
 
   const openShieldSelector = useCallback(() => {
     const game = gameRef.current;
@@ -4397,17 +4671,26 @@ export default function ScorchedGame() {
       return;
     }
     setWeaponSelectorOpen(false);
+    setPrecisionControl(null);
+    setCameraPanelOpen(false);
+    cancelMobileFireHold();
     if (weaponDialogRef.current?.open) {
       weaponDialogRef.current.close();
     }
     setShieldSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [playUiAudio, settingsOpen]);
+  }, [cancelMobileFireHold, playUiAudio, settingsOpen]);
 
   useEffect(() => {
     const portrait = window.matchMedia("(orientation: portrait)");
     const closeInPortrait = () => {
       if (portrait.matches) {
+        cancelMobileFireHold();
+        pointerGestureRef.current.pointers.clear();
+        pointerGestureRef.current.pinchDistance = null;
+        pointerGestureRef.current.pinchMidpoint = null;
+        setPrecisionControl(null);
+        setCameraPanelOpen(false);
         if (weaponDialogRef.current?.open) {
           closeWeaponSelector();
         }
@@ -4420,7 +4703,11 @@ export default function ScorchedGame() {
     portrait.addEventListener("change", closeInPortrait);
     closeInPortrait();
     return () => portrait.removeEventListener("change", closeInPortrait);
-  }, [closeShieldSelector, closeWeaponSelector]);
+  }, [
+    cancelMobileFireHold,
+    closeShieldSelector,
+    closeWeaponSelector,
+  ]);
 
   useEffect(() => {
     const dialog = weaponDialogRef.current;
@@ -4542,10 +4829,15 @@ export default function ScorchedGame() {
 
     const renderFrame = (now: number) => {
       const game = gameRef.current;
-      const delta = Math.min(
-        0.033,
-        Math.max(0, (now - (lastFrameRef.current || now)) / 1_000),
-      );
+      const delta = settingsOpenRef.current
+        ? 0
+        : Math.min(
+            0.033,
+            Math.max(
+              0,
+              (now - (lastFrameRef.current || now)) / 1_000,
+            ),
+          );
       lastFrameRef.current = now;
 
       updateParticles(
@@ -4562,19 +4854,26 @@ export default function ScorchedGame() {
         ? clamp(shot.elapsedMs / shot.duration, 0, 1)
         : 0;
       const world = cameraWorldForTerrain(game.terrain);
+      const viewport = viewportRef.current;
+      const mobileViewport = isMobileCombatViewport(viewport);
 
       if (cameraModeRef.current === "auto") {
         const focusPoint = shot
           ? shotCameraTarget(shot, cameraProgress)
           : game.phase === "aiming" || game.phase === "intro"
-            ? cameraTargetForTank(game.tanks[game.activePlayer])
+            ? cameraTargetForTank(
+                game.tanks[game.activePlayer],
+                viewport,
+                mobileViewport && game.phase === "aiming",
+                cameraRef.current.zoom,
+              )
             : null;
         if (focusPoint) {
           cameraRef.current = moveCameraToward(
             cameraRef.current,
             focusPoint,
             delta,
-            CAMERA_VIEWPORT,
+            viewport,
             world,
             shot && !game.reducedMotion ? 9.5 : 7,
           );
@@ -4582,14 +4881,14 @@ export default function ScorchedGame() {
       } else {
         cameraRef.current = clampCamera(
           cameraRef.current,
-          CAMERA_VIEWPORT,
+          viewport,
           world,
         );
       }
       const camera = cameraRef.current;
 
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      drawBackdrop(context, now, camera);
+      context.setTransform(viewport.dpr, 0, 0, viewport.dpr, 0, 0);
+      drawBackdrop(context, now, camera, viewport);
       const cameraOffset = cameraShakeOffset(
         shot,
         cameraProgress,
@@ -4597,11 +4896,11 @@ export default function ScorchedGame() {
       );
       context.save();
       context.beginPath();
-      context.rect(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+      context.rect(0, 0, viewport.width, viewport.height);
       context.clip();
       context.translate(
-        VIEWPORT_WIDTH / 2 + cameraOffset.x,
-        VIEWPORT_HEIGHT / 2 + cameraOffset.y,
+        viewport.width / 2 + cameraOffset.x,
+        viewport.height / 2 + cameraOffset.y,
       );
       context.scale(camera.zoom, camera.zoom);
       context.translate(-camera.center.x, -camera.center.y);
@@ -4724,12 +5023,16 @@ export default function ScorchedGame() {
 
       drawParticles(context, particlesRef.current);
       context.restore();
-      drawMinimap(
-        context,
-        terrainCacheRef.current?.minimap ?? terrainCanvas,
-        game,
-        cameraRef.current,
-      );
+      const minimapCanvas = minimapCanvasRef.current;
+      if (minimapCanvas) {
+        drawMinimap(
+          minimapCanvas,
+          terrainCacheRef.current?.minimap ?? terrainCanvas,
+          game,
+          cameraRef.current,
+          viewport,
+        );
+      }
       frameRef.current = requestAnimationFrame(renderFrame);
     };
 
@@ -5005,6 +5308,9 @@ export default function ScorchedGame() {
       return;
     }
 
+    cancelMobileFireHold();
+    setPrecisionControl(null);
+    setCameraPanelOpen(false);
     const owner = game.activePlayer;
     const tank = game.tanks[owner];
     const experimentalId = isInfiniteArsenalMode(game.mode)
@@ -5046,7 +5352,88 @@ export default function ScorchedGame() {
       pan: audioPanForX(shot.finalPoint.x, game.terrain.width),
       seed: shot.seed,
     });
-  }, [playAudioEvent, refresh]);
+  }, [cancelMobileFireHold, playAudioEvent, refresh]);
+
+  const handleMobileFirePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType === "mouse") {
+        return;
+      }
+      event.preventDefault();
+      if (mobileFireLocked || fireHoldRef.current.pointerId !== null) {
+        return;
+      }
+
+      cancelMobileFireHold();
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Synthetic coarse-pointer tests and interrupted browser gestures may
+        // not expose an active native pointer to capture. The hold timer still
+        // has complete cancel coverage through the remaining pointer events.
+      }
+      const pointerId = event.pointerId;
+      const timer = window.setTimeout(() => {
+        const hold = fireHoldRef.current;
+        if (hold.pointerId !== pointerId || hold.completed) {
+          return;
+        }
+        hold.completed = true;
+        hold.timer = null;
+        suppressFireClickRef.current = true;
+        setFireHolding(false);
+        fire();
+      }, MOBILE_FIRE_HOLD_MS);
+      fireHoldRef.current = {
+        pointerId,
+        timer,
+        completed: false,
+      };
+      setFireHolding(true);
+    },
+    [cancelMobileFireHold, fire, mobileFireLocked],
+  );
+
+  const handleMobileFirePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (
+        fireHoldRef.current.pointerId !== event.pointerId ||
+        pointInsideRect(
+          event.clientX,
+          event.clientY,
+          event.currentTarget.getBoundingClientRect(),
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      suppressFireClickRef.current = true;
+      cancelMobileFireHold();
+    },
+    [cancelMobileFireHold],
+  );
+
+  const releaseMobileFirePointer = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (fireHoldRef.current.pointerId !== event.pointerId) {
+        return;
+      }
+      if (event.pointerType !== "mouse") {
+        event.preventDefault();
+        suppressFireClickRef.current = true;
+      }
+      cancelMobileFireHold();
+    },
+    [cancelMobileFireHold],
+  );
+
+  const handleMobileFireClick = useCallback(() => {
+    if (suppressFireClickRef.current) {
+      suppressFireClickRef.current = false;
+      return;
+    }
+    fire();
+  }, [fire]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -5073,6 +5460,7 @@ export default function ScorchedGame() {
             resetTransientSelectorsForTurnChange();
           }
           setSettingsScreen(nextScreen);
+          audioRef.current?.setPaused(!settingsOpen);
           playUiAudio(
             settingsOpen ? "selector-close" : "selector-open",
           );
@@ -5125,6 +5513,11 @@ export default function ScorchedGame() {
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.hidden) {
+        cancelMobileFireHold();
+        fireReleaseGatePointerRef.current = null;
+        suppressFireClickRef.current = false;
+        setPrecisionControl(null);
+        setCameraPanelOpen(false);
         setSettingsScreen((screen) =>
           settingsScreenAfterPageLifecycle(screen, "hidden"),
         );
@@ -5153,7 +5546,7 @@ export default function ScorchedGame() {
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [refresh]);
+  }, [cancelMobileFireHold, refresh]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -5194,9 +5587,15 @@ export default function ScorchedGame() {
     setSettingsScreen(nextScreen);
     cameraModeRef.current = "auto";
     game.phase = "aiming";
+    const viewport = viewportRef.current;
     cameraRef.current = createCamera(
-      cameraTargetForTank(game.tanks[game.activePlayer]),
-      CAMERA_VIEWPORT,
+      cameraTargetForTank(
+        game.tanks[game.activePlayer],
+        viewport,
+        isMobileCombatViewport(viewport),
+        cameraRef.current.zoom,
+      ),
+      viewport,
       cameraWorldForTerrain(game.terrain),
       cameraRef.current.zoom,
     );
@@ -5373,6 +5772,7 @@ export default function ScorchedGame() {
     }
     resetTransientSelectorsForTurnChange();
     setSettingsScreen(nextScreen);
+    audioRef.current?.setPaused(true);
     playUiAudio("selector-open");
   }, [
     playUiAudio,
@@ -5390,6 +5790,7 @@ export default function ScorchedGame() {
       return;
     }
     setSettingsScreen(nextScreen);
+    audioRef.current?.setPaused(false);
     playUiAudio("selector-close");
     canvasRef.current?.focus({ preventScroll: true });
   }, [playUiAudio, settingsScreen]);
@@ -5402,11 +5803,14 @@ export default function ScorchedGame() {
     gameRef.current.audioDiagnostic = previous.audioDiagnostic;
     gameRef.current.reducedMotion = previous.reducedMotion;
     gameRef.current.effectLevel = previous.effectLevel;
+    const viewport = viewportRef.current;
     cameraRef.current = createCamera(
       cameraTargetForTank(
         gameRef.current.tanks[gameRef.current.activePlayer],
+        viewport,
+        isMobileCombatViewport(viewport),
       ),
-      CAMERA_VIEWPORT,
+      viewport,
       cameraWorldForTerrain(gameRef.current.terrain),
     );
     cameraModeRef.current = "auto";
@@ -5604,13 +6008,21 @@ export default function ScorchedGame() {
   );
 
   return (
-    <div className={styles.game}>
+    <div
+      ref={gameContainerRef}
+      className={`${styles.game} ${
+        mobileCombat ? styles.mobileCombat : ""
+      }`}
+      data-mobile-combat={mobileCombat ? "true" : "false"}
+      data-client-ready={clientReady ? "true" : "false"}
+      data-stage-width={stageMetrics.width}
+      data-stage-height={stageMetrics.height}
+    >
       <canvas
         ref={canvasRef}
         className={styles.canvas}
-        width={VIEWPORT_WIDTH}
-        height={VIEWPORT_HEIGHT}
         tabIndex={-1}
+        data-testid="battlefield-canvas"
         data-game-keyboard-owner="aiming"
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={handleCanvasPointerMove}
@@ -5621,7 +6033,8 @@ export default function ScorchedGame() {
         aria-label="Большое артиллерийское поле. Тяните для прокрутки, используйте pinch или Control с колесом для масштаба."
       />
 
-      {(model.phase === "aiming" || model.phase === "firing") && (
+      {(model.phase === "aiming" || model.phase === "firing") &&
+        !mobileCombat && (
         <div
           className={styles.cameraHud}
           role="group"
@@ -5678,7 +6091,97 @@ export default function ScorchedGame() {
         </div>
       )}
 
-      <div className={styles.topHud} aria-live="polite">
+      {model.phase === "aiming" && mobileCombat && !stageTooShort && (
+        <div className={styles.mobileCameraLayer}>
+          <button
+            type="button"
+            className={styles.cameraToggle}
+            onClick={toggleCameraPanel}
+            aria-label={
+              cameraPanelOpen
+                ? "Закрыть управление камерой"
+                : "Открыть управление камерой"
+            }
+            aria-expanded={cameraPanelOpen}
+            aria-controls="mobile-camera-popover"
+            data-testid="camera-toggle"
+          >
+            ◎
+          </button>
+          {cameraPanelOpen && (
+            <div
+              id="mobile-camera-popover"
+              className={styles.cameraPopover}
+              role="group"
+              aria-label="Управление камерой"
+              data-testid="camera-popover"
+            >
+              <div className={styles.cameraPopoverActions}>
+                <button
+                  type="button"
+                  className={styles.cameraButton}
+                  onClick={() => panCameraPage(-1)}
+                  aria-label="Прокрутить карту влево"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  className={styles.cameraButton}
+                  onClick={recenterCamera}
+                  aria-label="Вернуть камеру к активному танку"
+                >
+                  ◎
+                </button>
+                <button
+                  type="button"
+                  className={styles.cameraButton}
+                  onClick={() => panCameraPage(1)}
+                  aria-label="Прокрутить карту вправо"
+                >
+                  →
+                </button>
+                <button
+                  type="button"
+                  className={styles.cameraButton}
+                  onClick={() => changeCameraZoom(1 / 1.16)}
+                  aria-label="Отдалить карту"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  className={styles.cameraButton}
+                  onClick={() => changeCameraZoom(1.16)}
+                  aria-label="Приблизить карту"
+                >
+                  +
+                </button>
+              </div>
+              <canvas
+                ref={minimapCanvasRef}
+                className={styles.mobileMinimap}
+                width={MINIMAP_CACHE_WIDTH}
+                height={MINIMAP_CACHE_HEIGHT}
+                onPointerDown={handleMinimapPointerDown}
+                onPointerMove={handleMinimapPointerMove}
+                onPointerUp={releaseMinimapPointer}
+                onPointerCancel={releaseMinimapPointer}
+                onLostPointerCapture={releaseMinimapPointer}
+                aria-label="Миникарта: коснитесь области для перехода"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div
+        className={`${styles.topHud} ${
+          mobileCombat ? styles.mobileCombatStrip : ""
+        }`}
+        aria-live={mobileCombat ? undefined : "polite"}
+        data-testid="top-combat-strip"
+      >
         {model.tanks.map((tank, index) => (
           <section
             key={tank.id}
@@ -5697,8 +6200,31 @@ export default function ScorchedGame() {
           >
             <div className={styles.playerLine}>
               <span className={styles.playerIdentity}>
+                <span
+                  className={styles.activeMarker}
+                  aria-hidden="true"
+                >
+                  {model.activePlayer === index &&
+                  (model.phase === "aiming" ||
+                    model.phase === "firing")
+                    ? "▶"
+                    : "·"}
+                </span>
                 <span className={styles.playerDot} aria-hidden="true" />
-                <span className={styles.playerName}>{tank.name}</span>
+                <span
+                  className={styles.playerName}
+                  title={tank.name}
+                  aria-label={tank.name}
+                >
+                  {mobileCombat
+                    ? tank.name.replace(/^Пилот\s+/, "")
+                    : tank.name}
+                </span>
+              </span>
+              <span className={styles.playerVitals}>
+                <strong>{Math.ceil(tank.health)}</strong>
+                <span aria-hidden="true">·</span>
+                <strong>◇{Math.ceil(tank.shield)}</strong>
               </span>
               <span className={styles.money}>₡ {formatCredits(tank.credits)}</span>
             </div>
@@ -5737,7 +6263,8 @@ export default function ScorchedGame() {
             {infiniteArsenal ? "Infinite Arsenal" : "Quick Match"}
           </p>
           <strong className={styles.roundValue}>
-            Раунд {model.round}/{TOTAL_ROUNDS}
+            {mobileCombat ? "R" : "Раунд "}
+            {model.round}/{TOTAL_ROUNDS}
           </strong>
           <div className={styles.windLine}>
             <span
@@ -5754,13 +6281,68 @@ export default function ScorchedGame() {
             <span>{Math.abs(model.wind)} ветер</span>
           </div>
         </section>
+
+        {mobileCombat &&
+          (model.phase === "aiming" || model.phase === "firing") && (
+            <div className={styles.mobileStripActions}>
+              {!model.audioAvailable && (
+                <button
+                  type="button"
+                  className={styles.audioWarning}
+                  onClick={openSettings}
+                  aria-label="Аудио отключено. Открыть настройки"
+                  title="Аудио отключено"
+                >
+                  !
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.topPause}
+                onClick={openSettings}
+                aria-label="Пауза и настройки"
+                title="Пауза (P)"
+              >
+                ⏸
+              </button>
+            </div>
+          )}
       </div>
 
-      <div className={styles.statusRibbon} role="status">
+      <div
+        className={`${styles.statusRibbon} ${
+          mobileCombat ? styles.mobileStatusToast : ""
+        } ${
+          mobileCombat && !statusToastVisible
+            ? styles.mobileStatusToastHidden
+            : ""
+        }`}
+        role={mobileCombat ? undefined : "status"}
+        aria-hidden={mobileCombat ? "true" : undefined}
+        data-testid="status-toast"
+      >
+        {model.message}
+      </div>
+      <div className={styles.srOnly} role="status" aria-live="polite">
         {model.message}
       </div>
 
-      {model.phase === "aiming" && !settingsOpen && (
+      {stageTooShort &&
+        (model.phase === "aiming" || model.phase === "firing") && (
+          <div
+            className={styles.browserPanelsGate}
+            role="alert"
+            data-testid="browser-panels-gate"
+          >
+            <strong>Сверните панели браузера</strong>
+            <span>
+              Для безопасного управления полю нужно не менее 286 px по
+              высоте.
+            </span>
+          </div>
+        )}
+
+      {model.phase === "aiming" && !settingsOpen && !mobileCombat && (
         <button
           type="button"
           className={styles.iconButton}
@@ -5773,7 +6355,8 @@ export default function ScorchedGame() {
       )}
 
       {(model.phase === "aiming" || model.phase === "firing") &&
-        !model.audioAvailable && (
+        !model.audioAvailable &&
+        !mobileCombat && (
           <button
             type="button"
             className={styles.audioRecoveryButton}
@@ -5785,7 +6368,238 @@ export default function ScorchedGame() {
           </button>
         )}
 
-      {model.phase === "aiming" && (
+      {model.phase === "aiming" && mobileCombat && !stageTooShort && (
+        <>
+          {precisionControl !== null && (
+            <div
+              className={styles.precisionTray}
+              role="group"
+              aria-label={
+                precisionControl === "angle"
+                  ? "Точная настройка угла"
+                  : "Точная настройка силы"
+              }
+              data-testid={`${precisionControl}-precision-tray`}
+            >
+              <button
+                type="button"
+                className={styles.precisionStep}
+                onClick={() =>
+                  precisionControl === "angle"
+                    ? adjustAngle(activeTank.angleDegrees - 1)
+                    : adjustPower(activeTank.power - 10)
+                }
+                aria-label={
+                  precisionControl === "angle"
+                    ? "Уменьшить угол"
+                    : "Уменьшить силу"
+                }
+              >
+                −
+              </button>
+              <strong className={styles.precisionValue}>
+                {precisionControl === "angle"
+                  ? `${Math.round(activeTank.angleDegrees)}°`
+                  : Math.round(activeTank.power)}
+              </strong>
+              <input
+                className={styles.precisionSlider}
+                type="range"
+                min={precisionControl === "angle" ? 5 : 180}
+                max={precisionControl === "angle" ? 88 : activePowerMax}
+                step={precisionControl === "angle" ? 1 : 10}
+                value={
+                  precisionControl === "angle"
+                    ? activeTank.angleDegrees
+                    : activeTank.power
+                }
+                onChange={(event) =>
+                  precisionControl === "angle"
+                    ? adjustAngle(Number(event.target.value))
+                    : adjustPower(Number(event.target.value))
+                }
+                aria-label={
+                  precisionControl === "angle"
+                    ? "Угол орудия"
+                    : "Сила выстрела"
+                }
+              />
+              <button
+                type="button"
+                className={styles.precisionStep}
+                onClick={() =>
+                  precisionControl === "angle"
+                    ? adjustAngle(activeTank.angleDegrees + 1)
+                    : adjustPower(activeTank.power + 10)
+                }
+                aria-label={
+                  precisionControl === "angle"
+                    ? "Увеличить угол"
+                    : "Увеличить силу"
+                }
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className={styles.precisionDone}
+                onClick={() => {
+                  cancelMobileFireHold();
+                  setPrecisionControl(null);
+                }}
+              >
+                Готово
+              </button>
+            </div>
+          )}
+
+          <div
+            className={`${styles.mobileActionRail} ${
+              infiniteArsenal ? styles.mobileActionRailShowcase : ""
+            }`}
+            role="group"
+            aria-label="Основные действия хода"
+            data-testid="bottom-action-rail"
+          >
+            <div
+              className={styles.mobileAimStepper}
+              role="group"
+              aria-label="Угол"
+              data-testid="angle-stepper"
+            >
+              <button
+                type="button"
+                className={styles.mobileStepButton}
+                onClick={() => adjustAngle(activeTank.angleDegrees - 1)}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label="Уменьшить угол"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className={styles.mobileAimValue}
+                onClick={() => openPrecisionTray("angle")}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label={`Угол ${Math.round(
+                  activeTank.angleDegrees,
+                )} градусов. Открыть точную настройку`}
+              >
+                {Math.round(activeTank.angleDegrees)}°
+              </button>
+              <button
+                type="button"
+                className={styles.mobileStepButton}
+                onClick={() => adjustAngle(activeTank.angleDegrees + 1)}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label="Увеличить угол"
+              >
+                +
+              </button>
+            </div>
+
+            <div
+              className={styles.mobileAimStepper}
+              role="group"
+              aria-label="Сила"
+              data-testid="power-stepper"
+            >
+              <button
+                type="button"
+                className={styles.mobileStepButton}
+                onClick={() => adjustPower(activeTank.power - 10)}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label="Уменьшить силу"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className={styles.mobileAimValue}
+                onClick={() => openPrecisionTray("power")}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label={`Сила ${Math.round(
+                  activeTank.power,
+                )}. Открыть точную настройку`}
+              >
+                {Math.round(activeTank.power)}
+              </button>
+              <button
+                type="button"
+                className={styles.mobileStepButton}
+                onClick={() => adjustPower(activeTank.power + 10)}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-label="Увеличить силу"
+              >
+                +
+              </button>
+            </div>
+
+            <button
+              ref={weaponTriggerRef}
+              type="button"
+              className={styles.mobileLoadoutChip}
+              style={weaponStyle(selectedPlayable.accent)}
+              onClick={openWeaponSelector}
+              disabled={controlsLocked || transientLayerOpen}
+              aria-haspopup="dialog"
+              aria-expanded={weaponSelectorOpen}
+              aria-controls="weapon-selector-dialog"
+              aria-label={`Открыть Loadout, вкладка оружия: ${selectedPlayable.name}, ${selectedPlayable.stock}`}
+              data-testid="weapon-chip"
+            >
+              <span aria-hidden="true">{selectedPlayable.icon}</span>
+              <strong>{selectedPlayable.shortName}</strong>
+              <small>{selectedPlayable.stock.replace(" showcase", "")}</small>
+            </button>
+
+            {infiniteArsenal && (
+              <button
+                ref={shieldTriggerRef}
+                type="button"
+                className={styles.mobileShieldChip}
+                style={shieldStyle(activeShieldDefinition.accent)}
+                onClick={openShieldSelector}
+                disabled={controlsLocked || transientLayerOpen}
+                aria-haspopup="dialog"
+                aria-expanded={shieldSelectorOpen}
+                aria-controls="shield-selector-dialog"
+                aria-label={`Открыть Loadout, вкладка щита: ${
+                  activeShieldDefinition.name
+                }, заряд ${Math.ceil(activeTank.shield)}`}
+                data-testid="shield-chip"
+              >
+                <span aria-hidden="true">
+                  {activeShieldDefinition.icon}
+                </span>
+                <strong>{Math.ceil(activeTank.shield)}</strong>
+              </button>
+            )}
+
+            <button
+              ref={fireButtonRef}
+              type="button"
+              className={`${styles.mobileFireButton} ${
+                fireHolding ? styles.mobileFireButtonHolding : ""
+              }`}
+              onPointerDown={handleMobileFirePointerDown}
+              onPointerMove={handleMobileFirePointerMove}
+              onPointerUp={releaseMobileFirePointer}
+              onPointerCancel={releaseMobileFirePointer}
+              onLostPointerCapture={releaseMobileFirePointer}
+              onClick={handleMobileFireClick}
+              disabled={mobileFireLocked}
+              aria-label={`Удерживайте 350 миллисекунд для выстрела: ${selectedPlayable.name}`}
+              data-testid="fire-button"
+            >
+              <span>{fireHolding ? "Держи…" : "Держи"}</span>
+              <strong>Огонь</strong>
+            </button>
+          </div>
+        </>
+      )}
+
+      {model.phase === "aiming" && !mobileCombat && (
         <div
           className={`${styles.controlDeck} ${
             infiniteArsenal ? styles.controlDeckShowcase : ""
@@ -5964,6 +6778,7 @@ export default function ScorchedGame() {
         id="weapon-selector-dialog"
         ref={weaponDialogRef}
         className={styles.weaponDialog}
+        data-testid="loadout-weapon-dialog"
         aria-labelledby="weapon-selector-title"
         onCancel={(event) => {
           event.preventDefault();
@@ -6004,6 +6819,26 @@ export default function ScorchedGame() {
               ×
             </button>
           </header>
+
+          {infiniteArsenal && (
+            <div
+              className={styles.loadoutTabs}
+              role="tablist"
+              aria-label="Loadout"
+            >
+              <button type="button" role="tab" aria-selected="true">
+                Оружие
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected="false"
+                onClick={openShieldSelector}
+              >
+                Щит
+              </button>
+            </div>
+          )}
 
           <div
             className={styles.weaponFilterRow}
@@ -6183,6 +7018,7 @@ export default function ScorchedGame() {
         id="shield-selector-dialog"
         ref={shieldDialogRef}
         className={`${styles.weaponDialog} ${styles.shieldDialog}`}
+        data-testid="loadout-shield-dialog"
         aria-labelledby="shield-selector-title"
         onCancel={(event) => {
           event.preventDefault();
@@ -6219,6 +7055,24 @@ export default function ScorchedGame() {
               ×
             </button>
           </header>
+
+          <div
+            className={styles.loadoutTabs}
+            role="tablist"
+            aria-label="Loadout"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected="false"
+              onClick={openWeaponSelector}
+            >
+              Оружие
+            </button>
+            <button type="button" role="tab" aria-selected="true">
+              Щит
+            </button>
+          </div>
 
           <div
             className={`${styles.weaponGrid} ${styles.shieldGrid}`}
