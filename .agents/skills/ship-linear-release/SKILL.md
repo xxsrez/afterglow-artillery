@@ -98,6 +98,28 @@ force-push, переписывание истории, другой milestone/pr
 внешней инфраструктуры. Пользователь нужен только для настоящего продуктового
 выбора, неустранимой неоднозначности или внешнего блокера.
 
+## Ограничить проверки возможностями среды
+
+1. До dispatch и sealing зафиксируй capability boundary текущей среды:
+   доступные browser engines, подключённые устройства, automation paths,
+   credentials и release-инфраструктуру.
+2. В hard gate включай только проверки, которые реально можно выполнить в
+   текущей среде. Используй сильнейшие доступные substitutes: unit/property
+   tests, Chromium/WebKit browser suites, viewport/geometry snapshots,
+   lifecycle/resize scenarios и production smoke.
+3. Недоступный физический device, branded browser, listening pass или
+   performance trace записывай как `not-available` в `GAPS`. Это не `fail`, не
+   `needs-input` и не release blocker, даже если старый текст issue называл
+   такую проверку обязательной. Обнови acceptance/receipt под эту policy и не
+   заявляй, что недоступная совместимость была проверена.
+4. Не ослабляй известный дефект: воспроизведённая пользователем либо доступной
+   проверкой проблема остаётся настоящим `fail`. Если physical-device дефект
+   обнаружен уже после релиза, переоткрой исходную issue или создай
+   deduplicated linked Bug и выпусти исправление следующим batch.
+5. Делай недоступную внешнюю проверку hard gate только по новому явному решению
+   пользователя остановить релиз до ручного evidence. Само отсутствие
+   подключённого устройства или automation path такого решения не создаёт.
+
 ## Разделить роли
 
 Coordinator единолично владеет:

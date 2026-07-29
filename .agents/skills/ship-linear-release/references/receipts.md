@@ -124,6 +124,11 @@ UPDATED_AT: <timestamp>
 `ready` доказывает feature-scoped результат, но не full integrated gate,
 production readiness или право менять external state.
 
+`GAPS` различает `not-available` и известный fail. Недоступный physical device,
+branded browser, listening pass или trace остаётся non-blocking gap: не ставь
+из-за него `needs-input` и не заявляй проверенную совместимость. Известный
+воспроизведённый дефект gap-ом не маскируй.
+
 ## DEFECT_CANDIDATE
 
 Key: `<release_id>:<batch_id>:<generation>:<defect_key>`.
@@ -181,6 +186,11 @@ UPDATED_AT: <timestamp>
 
 Не заполняй downstream поля предположениями. Tag и `LINEAR_DONE` допустимы
 только после успешного live smoke.
+
+`STATUS: gate-passed` и `VALIDATION: run=pass` могут сосуществовать с
+`not-available` в `GAPS`, если все проверки capability boundary выполнены.
+Само отсутствие внешнего device/automation path не переводит receipt в
+`failed` или release run в `needs-input`.
 
 ## Восстановить после прерывания
 

@@ -41,7 +41,8 @@ Workers владеют только своими worktree/branch, реализа
 - ordered `issue -> base/dependency SHAs -> feature SHA -> origin ref`;
 - `candidate_sha` и source tree OID (`candidate^{tree}`);
 - `gate_contract_hash`: hash канонического списка обязательных команд, browser
-  flows, viewport/device gates и применимых правил;
+  flows, доступных viewport/device gates, capability boundary, non-blocking
+  `not-available` gaps и применимых правил;
 - `environment_fingerprint`: hash OS/arch, Node/npm, lockfile digest,
   build/browser runtime versions и иных влияющих на gate параметров.
 
@@ -56,9 +57,11 @@ default-branch CAS, Sites deployment и live smoke всегда выполняю
 
 Для generation без подходящего evidence один раз выполни полный integrated
 gate на exact candidate tree: `npm run check`, обязательные проверки из
-`AGENTS.md`, batch-wide affected scenarios и browser/device gates. Не запускай
-`npm run test:render` после успешного `npm run check`, если текущий script уже
-включает тот же build/render gate.
+`AGENTS.md`, batch-wide affected scenarios и доступные browser/device gates.
+Недоступный физический device, branded browser, listening pass или trace
+зафиксируй как non-blocking `not-available` gap; он не мешает `gate-passed`.
+Не запускай `npm run test:render` после успешного `npm run check`, если текущий
+script уже включает тот же build/render gate.
 
 При провале классифицируй причину:
 
@@ -72,6 +75,11 @@ gate на exact candidate tree: `npm run check`, обязательные про
 
 Не считай retry доказательством успеха при недетерминированном результате:
 необъяснённый flake блокирует candidate.
+
+Если после релиза пользователь сообщает physical-device regression, переоткрой
+исходную issue либо создай deduplicated linked Bug. Не превращай отсутствие
+подключённого устройства во время предыдущего batch в доказательство
+совместимости или в причину скрыть новый fail.
 
 ## Продвинуть exact candidate
 
