@@ -4569,7 +4569,7 @@ export default function ScorchedGame() {
             delta,
             CAMERA_VIEWPORT,
             world,
-            game.reducedMotion ? 18 : shot ? 9.5 : 7,
+            shot && !game.reducedMotion ? 9.5 : 7,
           );
         }
       } else {

@@ -174,7 +174,7 @@ describe("large-world camera", () => {
     expect(moved.center.y).toBeLessThan(500);
   });
 
-  it("tracks one projectile or the centroid of simultaneous segments", () => {
+  it("tracks active segments and holds their last meaningful focus", () => {
     const segments = [
       {
         path: [
@@ -199,8 +199,35 @@ describe("large-world camera", () => {
       y: 200,
     });
     expect(flightFocusPoint(segments, 0.8, { x: 44, y: 55 })).toEqual({
-      x: 44,
-      y: 55,
+      x: 600,
+      y: 100,
+    });
+  });
+
+  it("interpolates across a flight gap instead of falling back to origin", () => {
+    const origin = { x: 100, y: 500 };
+    const segments = [
+      {
+        path: [
+          origin,
+          { x: 900, y: 180 },
+        ],
+        startsAt: 0.1,
+        endsAt: 0.4,
+      },
+      {
+        path: [
+          { x: 1_500, y: 220 },
+          { x: 1_700, y: 420 },
+        ],
+        startsAt: 0.6,
+        endsAt: 0.8,
+      },
+    ];
+
+    expect(flightFocusPoint(segments, 0.5, origin)).toEqual({
+      x: 1_200,
+      y: 200,
     });
   });
 });

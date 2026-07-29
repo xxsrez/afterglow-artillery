@@ -285,19 +285,86 @@ export function flightFocusPoint(
   progress: number,
   fallback: Vector2,
 ): Vector2 {
+  const safeProgress = Number.isFinite(progress) ? progress : 0;
   const activePoints = segments.flatMap((segment) => {
-    if (progress < segment.startsAt || progress > segment.endsAt) {
+    if (
+      safeProgress < segment.startsAt ||
+      safeProgress > segment.endsAt
+    ) {
       return [];
     }
 
     const duration = Math.max(0.000_001, segment.endsAt - segment.startsAt);
     const point = pointAlongPath(
       segment.path,
-      (progress - segment.startsAt) / duration,
+      (safeProgress - segment.startsAt) / duration,
     );
 
     return point === null ? [] : [point];
   });
 
-  return averagePoints(activePoints, fallback);
+  if (activePoints.length > 0) {
+    return averagePoints(activePoints, fallback);
+  }
+
+  let previousAt = Number.NEGATIVE_INFINITY;
+  let nextAt = Number.POSITIVE_INFINITY;
+  for (const segment of segments) {
+    if (segment.path.length === 0) {
+      continue;
+    }
+    if (segment.endsAt < safeProgress) {
+      previousAt = Math.max(previousAt, segment.endsAt);
+    }
+    if (segment.startsAt > safeProgress) {
+      nextAt = Math.min(nextAt, segment.startsAt);
+    }
+  }
+
+  const previousPoints = Number.isFinite(previousAt)
+    ? segments.flatMap((segment) => {
+        if (segment.endsAt !== previousAt) {
+          return [];
+        }
+        const point = pointAlongPath(segment.path, 1);
+        return point === null ? [] : [point];
+      })
+    : [];
+  const nextPoints = Number.isFinite(nextAt)
+    ? segments.flatMap((segment) => {
+        if (segment.startsAt !== nextAt) {
+          return [];
+        }
+        const point = pointAlongPath(segment.path, 0);
+        return point === null ? [] : [point];
+      })
+    : [];
+
+  const previousFocus =
+    previousPoints.length > 0
+      ? averagePoints(previousPoints, fallback)
+      : null;
+  const nextFocus =
+    nextPoints.length > 0
+      ? averagePoints(nextPoints, fallback)
+      : null;
+
+  if (previousFocus && nextFocus) {
+    const gapDuration = Math.max(0.000_001, nextAt - previousAt);
+    const gapProgress = clamp(
+      (safeProgress - previousAt) / gapDuration,
+      0,
+      1,
+    );
+    return {
+      x:
+        previousFocus.x +
+        (nextFocus.x - previousFocus.x) * gapProgress,
+      y:
+        previousFocus.y +
+        (nextFocus.y - previousFocus.y) * gapProgress,
+    };
+  }
+
+  return previousFocus ?? nextFocus ?? { ...fallback };
 }
