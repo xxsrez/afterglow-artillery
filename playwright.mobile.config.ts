@@ -43,9 +43,9 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "npm run dev -- --host 127.0.0.1 --port 41921",
+      "npm run build && npm run start -- --host 127.0.0.1 --port 41921",
     url: "http://127.0.0.1:41921",
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 300_000,
   },
 });

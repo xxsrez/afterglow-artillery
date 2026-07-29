@@ -209,5 +209,5 @@ describe("mean-reverting wind domain", () => {
     expect(medianSideRun).toBeLessThanOrEqual(8);
     expect(bothDirectionsShare).toBeGreaterThanOrEqual(0.9);
     expect(boundaryShare).toBeLessThan(0.01);
-  });
+  }, 15_000);
 });

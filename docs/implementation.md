@@ -312,10 +312,10 @@ Safe-area учитывается со всех сторон. При высоте
 
 Для релизного состояния обязательна команда `npm run check`: она последовательно
 запускает ESLint, strict TypeScript, unit-тесты, production build и проверку
-server-rendered HTML. `npm run test:mobile` отдельно поднимает production-like
-dev server и прогоняет Chromium/WebKit matrix для Quick Demo и Infinite
-Arsenal на `667×375`, `844×390`, `852×393`, `932×430`, `844×320` и
-`932×296`. Suite измеряет overlap/overflow, canvas coverage, touch targets,
+server-rendered HTML. `npm run test:mobile` отдельно собирает production build,
+поднимает production server и прогоняет Chromium/WebKit matrix для Quick Demo
+и Infinite Arsenal на `667×375`, `844×390`, `852×393`, `932×430`, `844×320`
+и `932×296`. Suite измеряет overlap/overflow, canvas coverage, touch targets,
 Fire gap, fullscreen Loadout, precision trays, camera popover, coarse-pointer
 hold/cancel, Pause, resize/orientation, portrait gate и browser
 console/page errors; layout snapshots маскируют недетерминированную Canvas
