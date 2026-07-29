@@ -2178,6 +2178,9 @@
 }
 
 .mobileCombat {
+  width: var(--game-width, 100%);
+  height: var(--game-height, 100%);
+  place-self: start;
   border: 0;
   border-radius: 0;
   touch-action: none;
@@ -2580,7 +2583,6 @@
 }
 
 .mobileFireButton {
-  --hold-progress: 0%;
   position: relative;
   display: grid;
   width: 84px;
@@ -2600,21 +2602,9 @@
   touch-action: none;
 }
 
-.mobileFireButton::before {
-  position: absolute;
-  z-index: 0;
-  inset: 0 auto 0 0;
-  width: var(--hold-progress);
-  background: rgba(255, 255, 255, 0.48);
-  content: "";
-}
-
 .mobileFireButtonHolding {
-  animation: none;
-}
-
-.mobileFireButtonHolding::before {
-  animation: mobile-fire-hold 350ms linear forwards;
+  filter: brightness(1.08);
+  transform: translateY(1px) scale(0.985);
 }
 
 .mobileFireButton span,
@@ -2767,16 +2757,6 @@
 
 .mobileCombat .shieldGrid {
   margin-top: 4px;
-}
-
-@keyframes mobile-fire-hold {
-  from {
-    width: 0;
-  }
-
-  to {
-    width: 100%;
-  }
 }
 
 @media (max-width: 740px) and (orientation: landscape) {

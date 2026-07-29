@@ -294,16 +294,18 @@ focus. Modal делает фон inert и блокирует случайный 
 portrait закрывается перед orientation gate. Одна camera-кнопка открывает
 popover с minimap и controls и остаётся выше popover в hit-testing.
 
-Coarse-pointer Fire требует непрерывного удержания `350 ms` внутри кнопки;
-ранний release, уход pointer за границу, cancel/lost capture, background,
-Pause и открытие transient UI отменяют hold. После порога fire вызывается
-один раз. Mouse/keyboard flow остаётся обычным явным действием. На время полёта
-action rail и camera control скрываются; combat strip и Pause остаются
+Coarse-pointer Fire срабатывает один раз при отпускании внутри кнопки. Уход
+pointer за границу, cancel/lost capture, background, Pause и открытие transient
+UI отменяют tap; mouse/keyboard сохраняют обычное явное действие. На время
+полёта action rail и camera control скрываются; combat strip и Pause остаются
 доступными, а открытый Pause замораживает simulation/audio до resume.
 
 Safe-area учитывается со всех сторон. При высоте ниже `286 px` вместо боя
 показывается просьба закрыть панели браузера. Короткий status toast скрывается
 примерно через две секунды, а отдельный `aria-live` сохраняет сообщение.
+Размер самого combat surface, а не только Canvas backing store, ограничивается
+текущими `visualViewport.width/height`: при раскрытых панелях iPhone нижняя
+action rail остаётся внутри hit-testable видимой области.
 Магазин сохраняет собственные cards и отдельно показывает buy/sell quotes.
 Для пользователей с `prefers-reduced-motion` сокращаются тряска и декоративное
 движение, но не исчезают механические cues.
@@ -317,7 +319,7 @@ server-rendered HTML. `npm run test:mobile` отдельно собирает pr
 и Infinite Arsenal на `667×375`, `844×390`, `852×393`, `932×430`, `844×320`
 и `932×296`. Suite измеряет overlap/overflow, canvas coverage, touch targets,
 Fire gap, fullscreen Loadout, precision trays, camera popover, coarse-pointer
-hold/cancel, Pause, resize/orientation, portrait gate и browser
+tap/cancel, Pause, resize/orientation, portrait gate и browser
 console/page errors; layout snapshots маскируют недетерминированную Canvas
 presentation. Высота `844×320` служит прокси для раскрытых панелей мобильного
 браузера, portrait `390×844` — для orientation gate. После автоматики основной
@@ -345,7 +347,7 @@ parity без отдельных Linux baselines.
   совместимость формулируется как целевая, а не подтверждённая.
 - mobile geometry и interaction suite пройдены только в desktop-hosted
   Chromium/WebKit: реальный iPhone Safari pass с browser chrome, safe-area,
-  системными жестами, coarse hold-to-fire и rotate/resize всё ещё обязателен
+  системными жестами, coarse tap-to-fire и rotate/resize всё ещё обязателен
   перед закрытием `AND-19`.
 - качество нового микса на физическом iPhone, встроенном mono-динамике,
   headphones и при системном Silent Mode требует отдельного listening pass:

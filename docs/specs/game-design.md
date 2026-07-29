@@ -284,9 +284,9 @@ Classic, где default начинается с бесконечной Baby Miss
 - weapon chip открывает fullscreen Loadout на вкладке оружия, shield chip в
   Infinite Arsenal — на вкладке щитов; native modal делает фон inert;
 - Fire имеет рабочую область не меньше `84×56 CSS px`, отделён от соседнего
-  Loadout control минимум на `12 CSS px`; coarse pointer должен удерживаться
-  внутри control `350 ms`, ранний release, уход за границу, cancel, потеря
-  capture, background и Pause отменяют выстрел;
+  Loadout control минимум на `12 CSS px`; coarse pointer выпускает выстрел при
+  отпускании внутри control, а уход за границу, cancel, потеря capture,
+  background и Pause отменяют tap;
 - drag по свободному полю двигает камеру, pinch меняет масштаб;
 - одна кнопка камеры `48×48 CSS px` открывает popover с page-pan, zoom,
   возвратом к активному танку и minimap; minimap не отнимает место у поля в
@@ -301,6 +301,9 @@ Classic, где default начинается с бесконечной Baby Miss
   при `ResizeObserver`, `visualViewport` и orientation/resize events; координаты
   pointer переводятся через текущий bounding rect, без фиксированного
   `960×540` letterbox;
+- combat surface получает фактические `visualViewport.width/height`, а не
+  только backing-store canvas: раскрытые панели iPhone не могут оставить
+  action rail видимой под browser chrome, но недоступной для tap;
 - учитываются safe-area insets со всех четырёх сторон и динамические панели
   мобильного браузера; при доступной высоте меньше `286 CSS px` бой заменяется
   просьбой закрыть панели браузера;
@@ -311,8 +314,8 @@ Classic, где default начинается с бесконечной Baby Miss
 
 Fire control различается визуально и пространственно с точной настройкой.
 Случайный жест камеры, закрытие панели или modal не может выпустить дорогое
-оружие. Hold-to-fire относится только к coarse pointer: mouse/keyboard сохраняют
-явный click/shortcut flow.
+оружие. Coarse pointer, mouse и keyboard сохраняют единый явный
+tap/click/shortcut flow.
 
 Desktop использует тот же layout с мышью, колесом и клавиатурными shortcut,
 но не является отдельным UI.

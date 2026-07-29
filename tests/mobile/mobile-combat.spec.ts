@@ -100,6 +100,43 @@ test("precision trays are exclusive and gate Fire", async ({ page }) => {
   await expect(page.getByTestId("bottom-action-rail")).toBeVisible();
 });
 
+test("visible-viewport fit keeps real taps on aim and Fire controls", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.addInitScript(() => {
+    if (window.visualViewport) {
+      Object.defineProperty(window.visualViewport, "height", {
+        configurable: true,
+        get: () => 320,
+      });
+    }
+  });
+  await prepareMatch(page, "quick-demo");
+
+  await expect(page.getByTestId("game-container")).toHaveAttribute(
+    "data-stage-height",
+    "320",
+  );
+
+  await page.getByRole("button", { name: "Увеличить угол" }).tap();
+  await expect(
+    page.getByRole("button", {
+      name: "Угол 49 градусов. Открыть точную настройку",
+    }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Уменьшить угол" }).tap();
+  await expect(
+    page.getByRole("button", {
+      name: "Угол 48 градусов. Открыть точную настройку",
+    }),
+  ).toBeVisible();
+
+  const geometry = await collectGeometry(page);
+  expect(geometry.regions["game-container"]?.bottom).toBeLessThanOrEqual(320);
+  expect(geometry.regions["fire-button"]?.bottom).toBeLessThanOrEqual(320);
+});
+
 test("Loadout tabs are fullscreen and block background", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 320 });
   await prepareMatch(page, "infinite-arsenal");
@@ -140,14 +177,20 @@ test("camera popover owns minimap and stays clear of Fire", async ({ page }) => 
   await expect(page.getByTestId("camera-popover")).toBeHidden();
 });
 
-test("coarse Fire cancels early and completes exactly once", async ({ page }) => {
+test("coarse Fire taps once and cancels after leaving the button", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 844, height: 320 });
   await prepareMatch(page, "quick-demo");
 
   await dispatchCoarsePointer(page, "pointerdown");
   await dispatchCoarsePointer(page, "pointerup");
-  await page.waitForTimeout(420);
-  await expect(page.getByTestId("bottom-action-rail")).toBeVisible();
+  await expect(page.getByTestId("bottom-action-rail")).toBeHidden();
+  await expect(page.getByTestId("top-combat-strip")).toBeVisible();
+
+  await expect(page.getByTestId("bottom-action-rail")).toBeVisible({
+    timeout: 2_500,
+  });
 
   await dispatchCoarsePointer(page, "pointerdown", 73);
   await page.getByTestId("fire-button").dispatchEvent("pointermove", {
@@ -159,19 +202,8 @@ test("coarse Fire cancels early and completes exactly once", async ({ page }) =>
     clientX: 0,
     clientY: 0,
   });
-  await page.waitForTimeout(420);
+  await dispatchCoarsePointer(page, "pointerup", 73);
   await expect(page.getByTestId("bottom-action-rail")).toBeVisible();
-
-  await dispatchCoarsePointer(page, "pointerdown", 72);
-  await expect(page.getByTestId("bottom-action-rail")).toBeHidden();
-  await page.locator("body").dispatchEvent("pointerup", {
-    bubbles: true,
-    cancelable: true,
-    isPrimary: true,
-    pointerId: 72,
-    pointerType: "touch",
-  });
-  await expect(page.getByTestId("top-combat-strip")).toBeVisible();
 });
 
 test("resize and orientation round-trip preserve the match", async ({ page }) => {
@@ -185,8 +217,16 @@ test("resize and orientation round-trip preserve the match", async ({ page }) =>
   ).toBeVisible();
 
   await page.setViewportSize({ width: 844, height: 320 });
+  await expect(page.getByTestId("game-container")).toHaveAttribute(
+    "data-stage-height",
+    "320",
+  );
   assertAimingGeometry(await collectGeometry(page), "quick-demo");
   await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.getByTestId("game-container")).toHaveAttribute(
+    "data-stage-height",
+    "390",
+  );
   await expect(
     page.getByRole("button", {
       name: "Угол 49 градусов. Открыть точную настройку",
@@ -196,6 +236,10 @@ test("resize and orientation round-trip preserve the match", async ({ page }) =>
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(page.getByText("Поверните телефон", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 844, height: 320 });
+  await expect(page.getByTestId("game-container")).toHaveAttribute(
+    "data-stage-height",
+    "320",
+  );
   await expect(
     page.getByRole("button", {
       name: "Угол 49 градусов. Открыть точную настройку",

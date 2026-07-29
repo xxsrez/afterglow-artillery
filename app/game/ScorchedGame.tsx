@@ -151,9 +151,9 @@ import {
 } from "./weapon-selector";
 import {
   MOBILE_COMBAT_MIN_HEIGHT,
-  MOBILE_FIRE_HOLD_MS,
   cameraCenterForOccludedTarget,
   clientPointToViewport,
+  fitCombatViewport,
   isMobileCombatViewport,
   pointInsideRect,
   type CombatViewport,
@@ -294,10 +294,8 @@ interface CameraGesture {
   pinchMidpoint: Vector2 | null;
 }
 
-interface FireHoldState {
+interface FirePressState {
   pointerId: number | null;
-  timer: number | null;
-  completed: boolean;
 }
 
 const REFERENCE_CAMERA_VIEWPORT = {
@@ -3857,10 +3855,8 @@ export default function ScorchedGame() {
     pinchMidpoint: null,
   });
   const minimapPointerRef = useRef<number | null>(null);
-  const fireHoldRef = useRef<FireHoldState>({
+  const fireHoldRef = useRef<FirePressState>({
     pointerId: null,
-    timer: null,
-    completed: false,
   });
   const settingsOpenRef = useRef(false);
   const suppressFireClickRef = useRef(false);
@@ -4000,21 +3996,25 @@ export default function ScorchedGame() {
     if (!container || !canvas) {
       return;
     }
+    const layoutHost = container.parentElement;
 
     const measure = () => {
       const rect = container.getBoundingClientRect();
+      const layoutBounds = layoutHost
+        ? {
+            width: layoutHost.clientWidth,
+            height: layoutHost.clientHeight,
+          }
+        : rect;
       const visualViewport = window.visualViewport;
-      const width = Math.max(
-        1,
-        Math.round(
-          Math.min(rect.width, visualViewport?.width ?? rect.width),
-        ),
-      );
-      const height = Math.max(
-        1,
-        Math.round(
-          Math.min(rect.height, visualViewport?.height ?? rect.height),
-        ),
+      const { width, height } = fitCombatViewport(
+        layoutBounds,
+        visualViewport
+          ? {
+              width: visualViewport.width,
+              height: visualViewport.height,
+            }
+          : undefined,
       );
       const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
       const backingWidth = Math.max(1, Math.round(width * dpr));
@@ -4044,6 +4044,9 @@ export default function ScorchedGame() {
 
     const observer = new ResizeObserver(measure);
     observer.observe(container);
+    if (layoutHost) {
+      observer.observe(layoutHost);
+    }
     window.visualViewport?.addEventListener("resize", measure);
     window.visualViewport?.addEventListener("scroll", measure);
     window.addEventListener("orientationchange", measure);
@@ -4453,21 +4456,14 @@ export default function ScorchedGame() {
 
   const cancelMobileFireHold = useCallback(() => {
     const hold = fireHoldRef.current;
-    if (hold.timer !== null) {
-      window.clearTimeout(hold.timer);
-    }
+    fireHoldRef.current = { pointerId: null };
+    setFireHolding(false);
     if (
       hold.pointerId !== null &&
       fireButtonRef.current?.hasPointerCapture(hold.pointerId)
     ) {
       fireButtonRef.current.releasePointerCapture(hold.pointerId);
     }
-    fireHoldRef.current = {
-      pointerId: null,
-      timer: null,
-      completed: false,
-    };
-    setFireHolding(false);
   }, []);
 
   const openPrecisionTray = useCallback(
@@ -5369,29 +5365,14 @@ export default function ScorchedGame() {
         event.currentTarget.setPointerCapture(event.pointerId);
       } catch {
         // Synthetic coarse-pointer tests and interrupted browser gestures may
-        // not expose an active native pointer to capture. The hold timer still
-        // has complete cancel coverage through the remaining pointer events.
+        // not expose an active native pointer to capture.
       }
-      const pointerId = event.pointerId;
-      const timer = window.setTimeout(() => {
-        const hold = fireHoldRef.current;
-        if (hold.pointerId !== pointerId || hold.completed) {
-          return;
-        }
-        hold.completed = true;
-        hold.timer = null;
-        suppressFireClickRef.current = true;
-        setFireHolding(false);
-        fire();
-      }, MOBILE_FIRE_HOLD_MS);
       fireHoldRef.current = {
-        pointerId,
-        timer,
-        completed: false,
+        pointerId: event.pointerId,
       };
       setFireHolding(true);
     },
-    [cancelMobileFireHold, fire, mobileFireLocked],
+    [cancelMobileFireHold, mobileFireLocked],
   );
 
   const handleMobileFirePointerMove = useCallback(
@@ -5408,6 +5389,9 @@ export default function ScorchedGame() {
       }
       event.preventDefault();
       suppressFireClickRef.current = true;
+      window.setTimeout(() => {
+        suppressFireClickRef.current = false;
+      }, 0);
       cancelMobileFireHold();
     },
     [cancelMobileFireHold],
@@ -5418,9 +5402,39 @@ export default function ScorchedGame() {
       if (fireHoldRef.current.pointerId !== event.pointerId) {
         return;
       }
+      const shouldFire =
+        !mobileFireLocked &&
+        pointInsideRect(
+          event.clientX,
+          event.clientY,
+          event.currentTarget.getBoundingClientRect(),
+        );
       if (event.pointerType !== "mouse") {
         event.preventDefault();
         suppressFireClickRef.current = true;
+        window.setTimeout(() => {
+          suppressFireClickRef.current = false;
+        }, 0);
+      }
+      cancelMobileFireHold();
+      if (shouldFire) {
+        fire();
+      }
+    },
+    [cancelMobileFireHold, fire, mobileFireLocked],
+  );
+
+  const cancelMobileFirePointer = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (fireHoldRef.current.pointerId !== event.pointerId) {
+        return;
+      }
+      if (event.pointerType !== "mouse") {
+        event.preventDefault();
+        suppressFireClickRef.current = true;
+        window.setTimeout(() => {
+          suppressFireClickRef.current = false;
+        }, 0);
       }
       cancelMobileFireHold();
     },
@@ -6017,6 +6031,7 @@ export default function ScorchedGame() {
       data-client-ready={clientReady ? "true" : "false"}
       data-stage-width={stageMetrics.width}
       data-stage-height={stageMetrics.height}
+      data-testid="game-container"
     >
       <canvas
         ref={canvasRef}
@@ -6585,14 +6600,14 @@ export default function ScorchedGame() {
               onPointerDown={handleMobileFirePointerDown}
               onPointerMove={handleMobileFirePointerMove}
               onPointerUp={releaseMobileFirePointer}
-              onPointerCancel={releaseMobileFirePointer}
-              onLostPointerCapture={releaseMobileFirePointer}
+              onPointerCancel={cancelMobileFirePointer}
+              onLostPointerCapture={cancelMobileFirePointer}
               onClick={handleMobileFireClick}
               disabled={mobileFireLocked}
-              aria-label={`Удерживайте 350 миллисекунд для выстрела: ${selectedPlayable.name}`}
+              aria-label={`Огонь: ${selectedPlayable.name}`}
               data-testid="fire-button"
             >
-              <span>{fireHolding ? "Держи…" : "Держи"}</span>
+              <span>{fireHolding ? "Отпустите" : "Тап"}</span>
               <strong>Огонь</strong>
             </button>
           </div>

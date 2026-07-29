@@ -102,6 +102,7 @@ export async function collectGeometry(page: Page): Promise<GeometryDump> {
   return page.evaluate(() => {
     const regionIds = [
       "battlefield-canvas",
+      "game-container",
       "top-combat-strip",
       "bottom-action-rail",
       "angle-stepper",
@@ -187,6 +188,7 @@ export function assertAimingGeometry(
     targets,
   } = geometry;
   const canvas = regions["battlefield-canvas"];
+  const game = regions["game-container"];
   const top = regions["top-combat-strip"];
   const rail = regions["bottom-action-rail"];
   const fire = regions["fire-button"];
@@ -194,7 +196,7 @@ export function assertAimingGeometry(
     mode === "infinite-arsenal"
       ? regions["shield-chip"]
       : regions["weapon-chip"];
-  if (!canvas || !top || !rail || !fire || !loadoutNeighbor) {
+  if (!canvas || !game || !top || !rail || !fire || !loadoutNeighbor) {
     throw new Error("Missing persistent mobile combat geometry");
   }
 
@@ -202,6 +204,8 @@ export function assertAimingGeometry(
   expect(body.scrollHeight).toBeLessThanOrEqual(viewport.innerHeight);
   expect(canvas.width / viewport.innerWidth).toBeGreaterThanOrEqual(0.95);
   expect(canvas.height / viewport.innerHeight).toBeGreaterThanOrEqual(0.95);
+  expect(game.right).toBeLessThanOrEqual(viewport.visualWidth + 0.5);
+  expect(game.bottom).toBeLessThanOrEqual(viewport.visualHeight + 0.5);
   expect(top.bottom).toBeLessThanOrEqual(rail.top);
   expect(top.height + rail.height).toBeLessThanOrEqual(112);
   if (canvas.height >= 296) {
@@ -226,10 +230,7 @@ export async function dispatchCoarsePointer(
   type: "pointerdown" | "pointerup" | "pointercancel",
   pointerId = 71,
 ): Promise<void> {
-  const target =
-    type === "pointerdown"
-      ? page.getByTestId("fire-button")
-      : page.locator("body");
+  const target = page.getByTestId("fire-button");
   const box = await page.getByTestId("fire-button").boundingBox();
   const clientX = box ? box.x + box.width / 2 : 1;
   const clientY = box ? box.y + box.height / 2 : 1;

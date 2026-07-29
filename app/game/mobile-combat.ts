@@ -3,7 +3,6 @@ import type { CameraViewport } from "./camera";
 export const MOBILE_COMBAT_MAX_WIDTH = 960;
 export const MOBILE_COMBAT_MAX_HEIGHT = 520;
 export const MOBILE_COMBAT_MIN_HEIGHT = 286;
-export const MOBILE_FIRE_HOLD_MS = 350;
 
 export interface CombatViewport extends CameraViewport {
   readonly dpr: number;
@@ -12,6 +11,11 @@ export interface CombatViewport extends CameraViewport {
 export interface ClientRectLike {
   readonly left: number;
   readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface VisualViewportLike {
   readonly width: number;
   readonly height: number;
 }
@@ -36,6 +40,33 @@ export function isMobileCombatViewport(
     viewport.width <= MOBILE_COMBAT_MAX_WIDTH ||
     viewport.height <= MOBILE_COMBAT_MAX_HEIGHT
   );
+}
+
+/**
+ * iOS can keep the layout viewport taller than the visible area while browser
+ * chrome is expanded. The measured combat surface must fit the visual
+ * viewport, otherwise the bottom action rail remains visible behind the
+ * toolbar but cannot receive taps.
+ */
+export function fitCombatViewport(
+  rect: Pick<ClientRectLike, "width" | "height">,
+  visualViewport?: VisualViewportLike,
+): CameraViewport {
+  const rectWidth = finitePositive(rect.width, 1);
+  const rectHeight = finitePositive(rect.height, 1);
+  const visualWidth = finitePositive(
+    visualViewport?.width ?? rectWidth,
+    rectWidth,
+  );
+  const visualHeight = finitePositive(
+    visualViewport?.height ?? rectHeight,
+    rectHeight,
+  );
+
+  return {
+    width: Math.max(1, Math.round(Math.min(rectWidth, visualWidth))),
+    height: Math.max(1, Math.round(Math.min(rectHeight, visualHeight))),
+  };
 }
 
 export function clientPointToViewport(

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MOBILE_FIRE_HOLD_MS,
   cameraCenterForOccludedTarget,
   clientPointToViewport,
+  fitCombatViewport,
   isMobileCombatViewport,
   pointInsideRect,
 } from "../app/game/mobile-combat";
@@ -27,6 +27,21 @@ describe("mobile combat geometry", () => {
     ).toEqual({ x: 422, y: 160 });
   });
 
+  it("fits expanded iPhone browser chrome instead of leaving controls below it", () => {
+    expect(
+      fitCombatViewport(
+        { width: 844, height: 390 },
+        { width: 844, height: 320 },
+      ),
+    ).toEqual({ width: 844, height: 320 });
+    expect(
+      fitCombatViewport(
+        { width: 844, height: 320 },
+        { width: 844, height: 390 },
+      ),
+    ).toEqual({ width: 844, height: 320 });
+  });
+
   it("composes a target in the free frame between HUD occlusions", () => {
     expect(
       cameraCenterForOccludedTarget(
@@ -38,9 +53,7 @@ describe("mobile combat geometry", () => {
     ).toEqual({ x: 1_400, y: 508 });
   });
 
-  it("uses an in-range hold and cancels once a pointer leaves Fire", () => {
-    expect(MOBILE_FIRE_HOLD_MS).toBeGreaterThanOrEqual(300);
-    expect(MOBILE_FIRE_HOLD_MS).toBeLessThanOrEqual(450);
+  it("distinguishes an in-range Fire release from a dragged-out tap", () => {
     const rect = { left: 10, top: 20, width: 84, height: 56 };
     expect(pointInsideRect(52, 48, rect)).toBe(true);
     expect(pointInsideRect(95, 48, rect)).toBe(false);
