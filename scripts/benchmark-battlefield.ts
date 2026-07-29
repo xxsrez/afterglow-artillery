@@ -19,10 +19,18 @@ const corpus = BATTLEFIELD_LAYOUT_MOTIFS.flatMap((motif) =>
   ),
 );
 const start = performance.now();
+let totalAttempts = 0;
+let fallbackCount = 0;
 
 for (const item of corpus) {
   if (mode === "current") {
-    generateBattlefield(item.seed, { layoutMotif: item.motif });
+    const battlefield = generateBattlefield(item.seed, {
+      layoutMotif: item.motif,
+    });
+    totalAttempts += battlefield.metadata.attempt;
+    if (battlefield.metadata.fallbackReason !== null) {
+      fallbackCount += 1;
+    }
   } else {
     const terrain = generateTerrain(item.seed);
     findSpawnSites(terrain, {
@@ -41,5 +49,13 @@ console.log(
     dimensions: "2880x720",
     durationMs: Number(durationMs.toFixed(1)),
     averageMs: Number((durationMs / corpus.length).toFixed(1)),
+    ...(mode === "current"
+      ? {
+          averageAttempts: Number(
+            (totalAttempts / corpus.length).toFixed(2),
+          ),
+          fallbackCount,
+        }
+      : {}),
   }),
 );

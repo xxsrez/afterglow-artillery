@@ -8,6 +8,7 @@ import {
   Material,
   generateBattlefield,
   measureBattlefieldStructure,
+  normalizeSeed,
   type BattlefieldLayoutMotif,
 } from "../lib/game/index";
 
@@ -81,6 +82,7 @@ function renderTile(
   tileX: number,
   tileY: number,
   labelled: boolean,
+  labelTitle: string = motif,
 ): string {
   const battlefield = generateBattlefield(seed, { layoutMotif: motif });
   const soil = materialPath(
@@ -110,7 +112,7 @@ function renderTile(
   const structure = measureBattlefieldStructure(battlefield.terrain);
   const label = labelled
     ? `
-        <text x="4" y="${mapHeight + 14}" class="title">${escapeXml(motif)}</text>
+        <text x="4" y="${mapHeight + 14}" class="title">${escapeXml(labelTitle)}</text>
         <text x="4" y="${mapHeight + 28}" class="metric">P${structure.prominentPeakCount} B${structure.prominentBasinCount} C${structure.cliffCount} I${structure.floatingSolidComponentCount} · roof ${Math.round(structure.roofedColumnRatio * 100)}% · ${battlefield.spawns.map((spawn) => spawn.kind[0]).join("/")}</text>`
     : "";
 
@@ -133,8 +135,8 @@ function svgDocument(
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
   <style>
-    .title { fill: #e7f6fb; font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .metric { fill: #9cb4bf; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .title { fill: #e7f6fb; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 600; }
+    .metric { fill: #9cb4bf; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
   </style>
   <rect width="100%" height="100%" fill="#0d1b22"/>
   ${tiles.join("\n")}
@@ -170,8 +172,40 @@ for (const [row, profile] of BATTLEFIELD_LAYOUT_PROFILES.entries()) {
   }
 }
 
-const blindColumns = 4;
-const blindRows = 3;
+const variationSeeds = [
+  "gallery-variation-alpha",
+  "gallery-variation-beta",
+  "gallery-variation-gamma",
+] as const;
+const variationColumns = variationSeeds.length;
+const variationRows = BATTLEFIELD_LAYOUT_MOTIFS.length;
+const variationWidth =
+  outerPadding * 2 +
+  variationColumns * mapWidth +
+  (variationColumns - 1) * tileGap;
+const variationHeight =
+  outerPadding * 2 +
+  variationRows * (mapHeight + labelHeight) +
+  (variationRows - 1) * tileGap;
+const variationTiles: string[] = [];
+
+for (const [row, motif] of BATTLEFIELD_LAYOUT_MOTIFS.entries()) {
+  for (const [column, seed] of variationSeeds.entries()) {
+    variationTiles.push(
+      renderTile(
+        motif,
+        seed,
+        outerPadding + column * (mapWidth + tileGap),
+        outerPadding + row * (mapHeight + labelHeight + tileGap),
+        true,
+        `${motif} · seed ${column + 1}`,
+      ),
+    );
+  }
+}
+
+const blindColumns = 6;
+const blindRows = 6;
 const blindWidth =
   outerPadding * 2 +
   blindColumns * mapWidth +
@@ -180,24 +214,22 @@ const blindHeight =
   outerPadding * 2 +
   blindRows * mapHeight +
   (blindRows - 1) * tileGap;
-const blindOrder = [
-  BATTLEFIELD_LAYOUT_MOTIFS[0],
-  BATTLEFIELD_LAYOUT_MOTIFS[4],
-  BATTLEFIELD_LAYOUT_MOTIFS[8],
-  BATTLEFIELD_LAYOUT_MOTIFS[10],
-  BATTLEFIELD_LAYOUT_MOTIFS[5],
-  BATTLEFIELD_LAYOUT_MOTIFS[7],
-  BATTLEFIELD_LAYOUT_MOTIFS[2],
-  BATTLEFIELD_LAYOUT_MOTIFS[11],
-  BATTLEFIELD_LAYOUT_MOTIFS[6],
-  BATTLEFIELD_LAYOUT_MOTIFS[9],
-  BATTLEFIELD_LAYOUT_MOTIFS[1],
-  BATTLEFIELD_LAYOUT_MOTIFS[3],
-] as const;
-const blindTiles = blindOrder.map((motif, index) =>
+const blindCases = BATTLEFIELD_LAYOUT_MOTIFS.flatMap((motif) =>
+  variationSeeds.map((seed) => ({ motif, seed })),
+).sort((left, right) => {
+  const scoreDifference =
+    normalizeSeed(`${left.seed}:${left.motif}:blind-position`) -
+    normalizeSeed(`${right.seed}:${right.motif}:blind-position`);
+  return (
+    scoreDifference ||
+    left.motif.localeCompare(right.motif) ||
+    left.seed.localeCompare(right.seed)
+  );
+});
+const blindTiles = blindCases.map(({ motif, seed }, index) =>
   renderTile(
     motif,
-    "gallery-blind-shared-seed",
+    seed,
     outerPadding + (index % blindColumns) * (mapWidth + tileGap),
     outerPadding + Math.floor(index / blindColumns) * (mapHeight + tileGap),
     false,
@@ -212,6 +244,10 @@ const blindPath = resolve(
   process.cwd(),
   "docs/verification/battlefield-layout-blind-gallery.svg",
 );
+const variationPath = resolve(
+  process.cwd(),
+  "docs/verification/battlefield-layout-seed-gallery.svg",
+);
 await Promise.all([
   writeFile(
     labelledPath,
@@ -223,6 +259,12 @@ await Promise.all([
     svgDocument(blindWidth, blindHeight, blindTiles),
     "utf8",
   ),
+  writeFile(
+    variationPath,
+    svgDocument(variationWidth, variationHeight, variationTiles),
+    "utf8",
+  ),
 ]);
 console.log(`Wrote ${labelledPath}`);
 console.log(`Wrote ${blindPath}`);
+console.log(`Wrote ${variationPath}`);

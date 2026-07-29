@@ -1,6 +1,10 @@
 import { Material, type TerrainGrid } from "./terrain";
 
 const SILHOUETTE_SAMPLE_COUNT = 64;
+const OCCUPANCY_COLUMN_COUNT = 32;
+const OCCUPANCY_ROW_COUNT = 12;
+const OCCUPANCY_SAMPLE_COUNT =
+  OCCUPANCY_COLUMN_COUNT * OCCUPANCY_ROW_COUNT;
 const COMPONENT_CELL_BUDGET = 160_000;
 const MIN_COMPONENT_BLOCK_SIZE = 4;
 
@@ -34,6 +38,13 @@ export interface BattlefieldStructureMetrics {
    * 1 is the top of the world.
    */
   readonly surfaceSilhouette: Float32Array;
+  /**
+   * Row-major 32×12 solid-occupancy field. Each sample is the fraction of
+   * solid cells in that normalized world region, so caves, bridges, detached
+   * masses and overhangs remain visible even when their top silhouette is
+   * unchanged.
+   */
+  readonly occupancySignature: Float32Array;
 }
 
 interface TerrainScan {
@@ -44,6 +55,8 @@ interface TerrainScan {
   readonly componentHeight: number;
   readonly blockSolidCounts: Uint32Array;
   readonly bottomAnchorBlocks: Uint8Array;
+  readonly occupancySolidCounts: Uint32Array;
+  readonly occupancyCellCounts: Uint32Array;
 }
 
 function clamp01(value: number): number {
@@ -70,6 +83,8 @@ function scanTerrain(terrain: TerrainGrid): TerrainScan {
     componentWidth * componentHeight,
   );
   const bottomAnchorBlocks = new Uint8Array(componentWidth);
+  const occupancySolidCounts = new Uint32Array(OCCUPANCY_SAMPLE_COUNT);
+  const occupancyCellCounts = new Uint32Array(OCCUPANCY_SAMPLE_COUNT);
   const minRoofedRun = Math.max(3, Math.round(height * 0.007));
 
   surfaces.fill(height);
@@ -82,6 +97,17 @@ function scanTerrain(terrain: TerrainGrid): TerrainScan {
 
     for (let x = 0; x < width; x += 1) {
       const material = cells[rowOffset + x] as Material;
+      const occupancyX = Math.min(
+        OCCUPANCY_COLUMN_COUNT - 1,
+        Math.floor((x * OCCUPANCY_COLUMN_COUNT) / width),
+      );
+      const occupancyY = Math.min(
+        OCCUPANCY_ROW_COUNT - 1,
+        Math.floor((y * OCCUPANCY_ROW_COUNT) / height),
+      );
+      const occupancyIndex =
+        occupancyY * OCCUPANCY_COLUMN_COUNT + occupancyX;
+      occupancyCellCounts[occupancyIndex] += 1;
 
       if (material === Material.Empty) {
         if (surfaces[x] !== height) {
@@ -90,6 +116,7 @@ function scanTerrain(terrain: TerrainGrid): TerrainScan {
         continue;
       }
 
+      occupancySolidCounts[occupancyIndex] += 1;
       if (surfaces[x] === height) {
         surfaces[x] = y;
       } else if (openRuns[x] >= minRoofedRun) {
@@ -115,7 +142,23 @@ function scanTerrain(terrain: TerrainGrid): TerrainScan {
     componentHeight,
     blockSolidCounts,
     bottomAnchorBlocks,
+    occupancySolidCounts,
+    occupancyCellCounts,
   };
+}
+
+function occupancySignature(scan: TerrainScan): Float32Array {
+  const signature = new Float32Array(OCCUPANCY_SAMPLE_COUNT);
+
+  for (let index = 0; index < signature.length; index += 1) {
+    const cellCount = scan.occupancyCellCounts[index] as number;
+    signature[index] =
+      cellCount === 0
+        ? 0
+        : (scan.occupancySolidCounts[index] as number) / cellCount;
+  }
+
+  return signature;
 }
 
 function medianSurfaceSilhouette(
@@ -519,6 +562,7 @@ export function measureBattlefieldStructure(
     roofedColumnRatio: roofed.count / terrain.width,
     undergroundOpenAirSpan: roofed.longest,
     surfaceSilhouette,
+    occupancySignature: occupancySignature(scan),
   };
 }
 
@@ -565,5 +609,64 @@ export function mirrorInvariantSilhouetteDistance(
 
   return Math.sqrt(
     Math.min(directSquaredError, mirroredSquaredError) / left.length,
+  );
+}
+
+/**
+ * Root-mean-square distance between two normalized 32×12 occupancy fields,
+ * minimized across direct and horizontal-mirror alignment.
+ */
+export function mirrorInvariantOccupancyDistance(
+  left: ArrayLike<number>,
+  right: ArrayLike<number>,
+): number {
+  if (
+    left.length !== OCCUPANCY_SAMPLE_COUNT ||
+    right.length !== OCCUPANCY_SAMPLE_COUNT
+  ) {
+    throw new RangeError(
+      `Occupancy signatures must contain ${OCCUPANCY_SAMPLE_COUNT} samples.`,
+    );
+  }
+
+  let directSquaredError = 0;
+  let mirroredSquaredError = 0;
+
+  for (let row = 0; row < OCCUPANCY_ROW_COUNT; row += 1) {
+    const rowOffset = row * OCCUPANCY_COLUMN_COUNT;
+    for (let column = 0; column < OCCUPANCY_COLUMN_COUNT; column += 1) {
+      const index = rowOffset + column;
+      const mirroredIndex =
+        rowOffset + OCCUPANCY_COLUMN_COUNT - column - 1;
+      const leftValue = left[index] as number;
+      const rightValue = right[index] as number;
+      const mirroredValue = right[mirroredIndex] as number;
+
+      if (
+        !Number.isFinite(leftValue) ||
+        !Number.isFinite(rightValue) ||
+        !Number.isFinite(mirroredValue) ||
+        leftValue < 0 ||
+        leftValue > 1 ||
+        rightValue < 0 ||
+        rightValue > 1 ||
+        mirroredValue < 0 ||
+        mirroredValue > 1
+      ) {
+        throw new RangeError(
+          "Occupancy samples must be finite numbers between 0 and 1.",
+        );
+      }
+
+      const directDifference = leftValue - rightValue;
+      const mirroredDifference = leftValue - mirroredValue;
+      directSquaredError += directDifference * directDifference;
+      mirroredSquaredError += mirroredDifference * mirroredDifference;
+    }
+  }
+
+  return Math.sqrt(
+    Math.min(directSquaredError, mirroredSquaredError) /
+      OCCUPANCY_SAMPLE_COUNT,
   );
 }

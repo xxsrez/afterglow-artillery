@@ -1,6 +1,7 @@
 import {
   createBattlefieldPlan,
   DEFAULT_BATTLEFIELD_LAYOUT_RULES,
+  type BattlefieldCavernRouteClass,
   type BattlefieldFeatureMaterial,
   type BattlefieldLayoutMotif,
   type BattlefieldLayoutProfile,
@@ -52,6 +53,7 @@ export interface BattlefieldSpawnMetadata {
 export interface BattlefieldGenerationMetadata {
   readonly profile: BattlefieldLayoutProfile;
   readonly motif: BattlefieldLayoutMotif;
+  readonly variation: BattlefieldPlan["variation"];
   readonly attempt: number;
   readonly fallbackReason: string | null;
   readonly topology: BattlefieldTopologyMetrics;
@@ -107,6 +109,32 @@ interface CaveConstruction {
   readonly firingAngleDegrees: number;
   readonly tunnelPoints: readonly SpawnSite[];
 }
+
+interface CavernRouteParameters {
+  readonly floorDepthRatio: number;
+  readonly mouthAngleOffsetDegrees: number;
+  readonly corridorBendRatio: number;
+}
+
+const CAVERN_ROUTE_PARAMETERS = {
+  "direct-rise": {
+    floorDepthRatio: 0.01,
+    mouthAngleOffsetDegrees: 0,
+    corridorBendRatio: 0.018,
+  },
+  "high-arc": {
+    floorDepthRatio: 0.042,
+    mouthAngleOffsetDegrees: 7,
+    corridorBendRatio: -0.052,
+  },
+  "deep-sag": {
+    floorDepthRatio: 0.072,
+    mouthAngleOffsetDegrees: -7,
+    corridorBendRatio: 0.064,
+  },
+} as const satisfies Readonly<
+  Record<BattlefieldCavernRouteClass, CavernRouteParameters>
+>;
 
 interface AttemptResult {
   readonly terrain: TerrainGrid;
@@ -837,6 +865,11 @@ function carveTacticalCave(
     readonly bedrockDepth: number;
   },
 ): CaveConstruction {
+  const routeClass = plan.cavernRouteClass;
+  if (routeClass === null) {
+    throw new Error("Cavern plan requires a cavern route class.");
+  }
+  const route = CAVERN_ROUTE_PARAMETERS[routeClass];
   const x = clamp(
     Math.round(terrain.width * role.preferredXRatio),
     options.padHalfWidth + 8,
@@ -853,7 +886,11 @@ function carveTacticalCave(
     Math.round(terrain.height * rules.caveHeadroomRatio),
   );
   const floorY = clamp(
-    surfaceY + roofTarget + headroom + 8,
+    surfaceY +
+      roofTarget +
+      headroom +
+      8 +
+      Math.round(terrain.height * route.floorDepthRatio),
     surfaceY + roofTarget + headroom,
     bedrockStart - 20,
   );
@@ -879,12 +916,20 @@ function carveTacticalCave(
     kind: "cave",
   };
   const tunnelRadius = Math.max(17, Math.round(terrain.height * 0.04));
-  const angleDegrees =
+  const motifAngleDegrees =
     plan.motif === "cliff-cave"
       ? 38
       : plan.motif === "underworld"
         ? 34
         : 42;
+  const slotAngleOffset = (plan.variation.slot % 3 - 1) * 1.5;
+  const angleDegrees = clamp(
+    motifAngleDegrees +
+      route.mouthAngleOffsetDegrees +
+      slotAngleOffset,
+    26,
+    54,
+  );
   const angle = (angleDegrees * Math.PI) / 180;
   const start: SpawnSite = {
     x: spawn.x + role.firingDirection * 12,
@@ -993,6 +1038,11 @@ function connectPlannedCaverns(
   if (actualCaves.length < 2) {
     return;
   }
+  const routeClass = plan.cavernRouteClass;
+  if (routeClass === null) {
+    throw new Error("Connected cavern plan requires a route class.");
+  }
+  const route = CAVERN_ROUTE_PARAMETERS[routeClass];
 
   const left = actualCaves[0] as CaveConstruction;
   const right = actualCaves[1] as CaveConstruction;
@@ -1011,9 +1061,9 @@ function connectPlannedCaverns(
     leftCenter,
     rightCenter,
     corridorRadius,
-    plan.motif === "underworld"
-      ? -terrain.height * 0.055
-      : terrain.height * 0.025,
+    terrain.height *
+      (route.corridorBendRatio +
+        (plan.motif === "underworld" ? -0.025 : 0)),
   );
 
   if (plan.motif === "underworld") {
@@ -1036,7 +1086,7 @@ function connectPlannedCaverns(
         y: chamberY,
       },
       Math.max(15, corridorRadius * 0.78),
-      -terrain.height * 0.028,
+      terrain.height * (route.corridorBendRatio * 0.46 - 0.028),
     );
     carveCaveCorridor(
       terrain,
@@ -1049,7 +1099,7 @@ function connectPlannedCaverns(
         y: right.floorY - Math.round(terrain.height * 0.045),
       },
       Math.max(15, corridorRadius * 0.78),
-      -terrain.height * 0.028,
+      terrain.height * (route.corridorBendRatio * 0.46 - 0.028),
     );
   }
 }
@@ -1426,6 +1476,7 @@ function generateAttempt(
   const metadata: BattlefieldGenerationMetadata = {
     profile: plan.profile,
     motif: plan.motif,
+    variation: plan.variation,
     attempt,
     fallbackReason,
     topology: featureMetrics(terrain, plan, spawns),
@@ -1472,13 +1523,23 @@ export function generateBattlefield(
     ...terrainOptions
   } = options;
   const rules = layoutRules ?? DEFAULT_BATTLEFIELD_LAYOUT_RULES;
+  if (
+    !Number.isInteger(rules.maxAttempts) ||
+    rules.maxAttempts < 1 ||
+    rules.maxAttempts > 12
+  ) {
+    throw new RangeError(
+      "Battlefield maxAttempts must be an integer between 1 and 12.",
+    );
+  }
   const width = terrainOptions.width ?? WORLD_WIDTH;
   const height = terrainOptions.height ?? WORLD_HEIGHT;
-  const plan = createBattlefieldPlan(seed, {
+  const selectedPlan = createBattlefieldPlan(seed, {
     roundNumber,
     profile: layoutProfile,
     motif: layoutMotif,
     rules,
+    candidate: 0,
   });
   const edgeMargin = clamp(
     Math.round(spawnEdgeMargin ?? Math.max(96, width * 0.08)),
@@ -1497,7 +1558,7 @@ export function generateBattlefield(
   );
   const minSeparation = clamp(
     Math.round(
-      minSpawnSeparation ?? width * plan.minSpawnSeparationRatio,
+      minSpawnSeparation ?? width * selectedPlan.minSpawnSeparationRatio,
     ),
     padHalfWidth * 3,
     Math.max(padHalfWidth * 3, width - edgeMargin * 2),
@@ -1525,28 +1586,47 @@ export function generateBattlefield(
   let lastFailure = "unknown";
 
   for (let attempt = 1; attempt <= rules.maxAttempts; attempt += 1) {
+    const candidatePlan = createBattlefieldPlan(seed, {
+      roundNumber,
+      profile: selectedPlan.profile,
+      motif: selectedPlan.motif,
+      rules,
+      candidate: attempt - 1,
+    });
     const result = generateAttempt(
-      plan,
+      candidatePlan,
       attempt,
       terrainOptions,
       spawnOptions,
       rules,
       null,
     );
-    const failure = validateAttempt(result.terrain, plan, result.metadata, {
-      padHalfWidth,
-      tankHalfHeight: resolvedTankHalfHeight,
-      minSeparation,
-      rules,
-    });
+    const failure = validateAttempt(
+      result.terrain,
+      candidatePlan,
+      result.metadata,
+      {
+        padHalfWidth,
+        tankHalfHeight: resolvedTankHalfHeight,
+        minSeparation,
+        rules,
+      },
+    );
     if (failure === null) {
-      return { ...result, plan };
+      return { ...result, plan: candidatePlan };
     }
     lastFailure = failure;
   }
 
+  const rescuePlan = createBattlefieldPlan(seed, {
+    roundNumber,
+    profile: selectedPlan.profile,
+    motif: selectedPlan.motif,
+    rules,
+    candidate: rules.maxAttempts,
+  });
   const rescue = generateAttempt(
-    plan,
+    rescuePlan,
     rules.maxAttempts + 1,
     {
       ...terrainOptions,
@@ -1556,11 +1636,11 @@ export function generateBattlefield(
     },
     spawnOptions,
     rules,
-    `${plan.profile}:${lastFailure}:clean-rescue`,
+    `${selectedPlan.profile}:${lastFailure}:clean-rescue`,
   );
   const rescueFailure = validateAttempt(
     rescue.terrain,
-    plan,
+    rescuePlan,
     rescue.metadata,
     {
       padHalfWidth,
@@ -1570,13 +1650,17 @@ export function generateBattlefield(
     },
   );
   if (rescueFailure === null) {
-    return { ...rescue, plan };
+    return { ...rescue, plan: rescuePlan };
   }
   lastFailure = rescueFailure;
 
-  if (layoutMotif !== undefined) {
+  if (layoutMotif !== undefined || layoutProfile !== undefined) {
+    const exactSelection =
+      layoutMotif !== undefined
+        ? `motif ${layoutMotif}`
+        : `profile ${layoutProfile}`;
     throw new Error(
-      `Unable to validate exact battlefield motif ${layoutMotif}: ` +
+      `Unable to validate exact battlefield ${exactSelection}: ` +
         `${lastFailure}.`,
     );
   }
@@ -1585,14 +1669,43 @@ export function generateBattlefield(
     roundNumber,
     profile: "open",
     rules,
+    candidate: rules.maxAttempts + 1,
   });
+  const fallbackMinSeparation = clamp(
+    Math.round(
+      minSpawnSeparation ?? width * fallbackPlan.minSpawnSeparationRatio,
+    ),
+    padHalfWidth * 3,
+    Math.max(padHalfWidth * 3, width - edgeMargin * 2),
+  );
+  const fallbackSpawnOptions = {
+    ...spawnOptions,
+    minSeparation: fallbackMinSeparation,
+  };
   const fallback = generateAttempt(
     fallbackPlan,
     rules.maxAttempts + 2,
     terrainOptions,
-    spawnOptions,
+    fallbackSpawnOptions,
     rules,
-    `${plan.profile}:${lastFailure}`,
+    `${selectedPlan.profile}:${lastFailure}`,
   );
+  const fallbackFailure = validateAttempt(
+    fallback.terrain,
+    fallbackPlan,
+    fallback.metadata,
+    {
+      padHalfWidth,
+      tankHalfHeight: resolvedTankHalfHeight,
+      minSeparation: fallbackMinSeparation,
+      rules,
+    },
+  );
+  if (fallbackFailure !== null) {
+    throw new Error(
+      `Unable to validate battlefield fallback ${fallbackPlan.motif}: ` +
+        `${fallbackFailure}.`,
+    );
+  }
   return { ...fallback, plan: fallbackPlan };
 }

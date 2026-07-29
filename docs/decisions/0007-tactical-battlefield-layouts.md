@@ -32,7 +32,7 @@ Ruleset хранит веса четырёх семейств, а каждое �
 3. `valley`: `deep-basin`, `split-chasm`, `terraced-canyon`;
 4. `cavern`: `cliff-cave`, `buried-duel`, `underworld`.
 
-Motif задаёт:
+Motif задаёт обязательный композиционный spine:
 
 - ordered surface anchors с переходами `smooth`, `linear` или `step`;
 - ordered material operations: добавить остров/мост/полку либо вырезать
@@ -40,13 +40,31 @@ Motif задаёт:
 - две bounded spawn regions, preferred position и минимальную дистанцию;
 - surface/cave roles и cavern variant.
 
+Spine не является готовой картой. Перед rasterization отдельная
+детерминированная instantiation-стадия строит same-motif candidate:
+
+- делает крупный bounded warp surface anchors, а не только pixel noise;
+- меняет положение, aspect, глубину, thickness и sag обязательных 2D
+  features внутри motif-safe диапазонов;
+- выбирает ограниченный secondary feature pack, поэтому между seeds меняются
+  число и связность масс/пустот, но обязательные признаки motif сохраняются;
+- сдвигает spawn roles внутри заданных search regions;
+- для cavern выбирает один из нескольких route classes, меняющих глубину
+  камеры, угол mouth и изгиб соединительного corridor.
+
+Plan записывает candidate, небольшой variation slot, структурную signature,
+число optional features и cavern route class. Все random streams адресованы
+`seed + round + motif + candidate + subsystem`; изменение одной подсистемы не
+должно случайно сдвигать остальные.
+
 Порядок генерации:
 
 ```text
 match seed + round
   → weighted family + seeded motif
-  → surface skeleton
-  → material masses, voids, arches, bridges and shelves
+  → same-motif composition candidate
+  → warped surface skeleton
+  → parameterized required features + bounded optional feature pack
   → bounded seeded local detail
   → paired spawn preparation
   → topology, structure and playability validation
@@ -88,14 +106,18 @@ barrier/basin и соответствие motif. `asymmetric-slope` гарант
 разных высотных уровнях; cave motif гарантируют хотя бы одну внутреннюю
 позицию.
 
-Генератор делает не более четырёх детерминированных попыток. Финальный clean
-rescue сохраняет тот же motif, отключает дополнительную roughness и
-записывается в metadata. Если exact `layoutMotif` после этого невалиден,
-генератор возвращает явную ошибку, а не подменяет fixture другим motif.
-Обычный weighted match сохраняет детерминированный open fallback. Результат
-записывается в metadata вместе с profile, attempt, причиной fallback, spawn
-kinds, relief/barrier/basin и cave clearance/roof/mouth/exit. Целевые пределы
-на общем seed corpus: fallback меньше `5%`, среднее число попыток меньше `2`.
+Генератор делает не более четырёх детерминированных попыток. Profile и motif
+выбираются один раз, но каждая попытка получает следующий same-motif
+composition candidate; невалидная instantiation не повторяется с другим
+pixel noise. Финальный clean rescue использует отдельный candidate того же
+motif, отключает дополнительную roughness и записывается в metadata. Если exact
+`layoutMotif` или явно выбранный `layoutProfile` после этого невалиден,
+генератор возвращает явную ошибку, а не подменяет fixture другим motif или
+семейством. Только обычный weighted match сохраняет
+детерминированный open fallback. Результат записывается в metadata вместе с
+profile, motif, variation, attempt, причиной fallback, spawn kinds,
+relief/barrier/basin и cave clearance/roof/mouth/exit. Целевые пределы на
+общем seed corpus: fallback меньше `5%`, среднее число попыток меньше `2`.
 
 ## Проверка
 
@@ -107,14 +129,18 @@ kinds, relief/barrier/basin и cave clearance/roof/mouth/exit. Целевые п
   metadata;
 - topology tests измеряют ridge/basin, roof, headroom, mouth connectivity,
   firing exit, support и bedrock; отдельные regression tests доказывают, что
-  width измерен по grid, default random caves отключены, а exact motif не
-  подменяется fallback;
+  width измерен по grid, default random caves отключены, а exact motif и
+  явно выбранный profile не подменяются fallback;
 - scaled sweep проверяет каждый из 12 exact motif на нескольких seeds;
-- воспроизводимая labelled gallery показывает все 12 motif, а shuffled blind
-  gallery скрывает labels и сравнивает только материал и spawn markers;
+- воспроизводимая labelled gallery показывает все 12 motif; отдельная
+  motif-by-seed gallery показывает минимум три instantiation одного motif, а
+  shuffled blind gallery скрывает labels у всех 36 вариантов;
 - внутри каждого семейства mirror-invariant distance 64-bin silhouette на
-  общем seed превышает `0.035`; structural metadata отдельно фиксирует robust
-  relief, cliffs, floating components и roofed span;
+  общем seed превышает `0.035`; coarse `32×12` occupancy distance независимо
+  видит caves, bridges, overhangs и detached masses. Multi-seed sweep
+  проверяет не только меж-motif различие, но и ненулевую структурную
+  вариативность внутри motif, variation signatures, spawn-axis variance и
+  несколько cavern route classes;
 - browser smoke проходит representative motif каждого семейства на desktop и
   short-height mobile с
   выключенными music и SFX;
@@ -126,6 +152,8 @@ kinds, relief/barrier/basin и cave clearance/roof/mouth/exit. Целевые п
 - Сложность уровня становится явными ruleset-данными и проверяемой
   топологией, а не побочным эффектом random walk.
 - Noise остаётся локальной детализацией и не является автором композиции.
+- Motif остаётся читаемым классом задачи, но больше не означает одну
+  зафиксированную геометрию с небольшим jitter.
 - Пещеры могут менять начальную задачу выстрела, не нарушая поддержку
   overhangs и туннелей material grid.
 - Добавление нового motif требует типа, material grammar, validator, fixtures

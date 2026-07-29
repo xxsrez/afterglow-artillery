@@ -15,6 +15,7 @@ import {
   generateBattlefield,
   generateTerrain,
   measureBattlefieldStructure,
+  mirrorInvariantOccupancyDistance,
   mirrorInvariantSilhouetteDistance,
   type BattlefieldLayoutMotif,
   type BattlefieldLayoutProfile,
@@ -118,6 +119,15 @@ function countOverhangColumns(terrain: TerrainGrid): number {
   return columns;
 }
 
+function lowerPercentile(
+  values: readonly number[],
+  probability: number,
+): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.floor((sorted.length - 1) * probability);
+  return sorted[index] ?? 0;
+}
+
 describe("large battlefield generation", () => {
   it("separates the fixed viewport from a substantially larger world", () => {
     const battlefield = generateBattlefield("full-world-dimensions");
@@ -156,6 +166,36 @@ describe("large battlefield generation", () => {
     expect(battlefieldGridHash(first.terrain)).not.toBe(
       battlefieldGridHash(different.terrain),
     );
+  });
+
+  it("measures internal 2D volume when the top silhouette is unchanged", () => {
+    const solid = new TerrainGrid(320, 120);
+    for (let y = 48; y < solid.height; y += 1) {
+      for (let x = 0; x < solid.width; x += 1) {
+        solid.set(x, y, Material.Soil);
+      }
+    }
+    const cavern = solid.clone();
+    cavern.carveCircle(160, 84, 22);
+    const solidStructure = measureBattlefieldStructure(solid);
+    const cavernStructure = measureBattlefieldStructure(cavern);
+
+    expect(solidStructure.surfaceSilhouette).toEqual(
+      cavernStructure.surfaceSilhouette,
+    );
+    expect(solidStructure.occupancySignature).toHaveLength(32 * 12);
+    expect(
+      mirrorInvariantOccupancyDistance(
+        solidStructure.occupancySignature,
+        solidStructure.occupancySignature,
+      ),
+    ).toBe(0);
+    expect(
+      mirrorInvariantOccupancyDistance(
+        solidStructure.occupancySignature,
+        cavernStructure.occupancySignature,
+      ),
+    ).toBeGreaterThan(0.01);
   });
 
   it("keeps all four plan profiles represented and avoids a three-round repeat", () => {
@@ -478,6 +518,52 @@ describe("large battlefield generation", () => {
     );
   });
 
+  it("never silently replaces an explicit profile override with open terrain", () => {
+    expect(() =>
+      generateBattlefield("cavern-fallback-14", {
+        layoutProfile: "cavern",
+        width: 960,
+        height: 360,
+        layoutRules: {
+          ...DEFAULT_BATTLEFIELD_LAYOUT_RULES,
+          caveHeadroomRatio: 0.35,
+          caveRoofMinRatio: 0.15,
+        },
+      }),
+    ).toThrowError(
+      "Unable to validate exact battlefield profile cavern: cave-roof.",
+    );
+  });
+
+  it("validates an automatic fallback against the fallback motif contract", () => {
+    const seed = "weighted-cavern-fallback-13";
+    const layoutRules = {
+      ...DEFAULT_BATTLEFIELD_LAYOUT_RULES,
+      caveHeadroomRatio: 0.35,
+      caveRoofMinRatio: 0.15,
+    };
+
+    expect(createBattlefieldPlan(seed, { rules: layoutRules }).profile).toBe(
+      "cavern",
+    );
+
+    const battlefield = generateBattlefield(seed, {
+      width: 960,
+      height: 360,
+      layoutRules,
+    });
+    const requiredSeparation = Math.round(
+      battlefield.terrain.width *
+        battlefield.plan.minSpawnSeparationRatio,
+    );
+
+    expect(battlefield.plan.profile).toBe("open");
+    expect(battlefield.metadata.fallbackReason).not.toBeNull();
+    expect(
+      battlefield.metadata.topology.horizontalSeparation,
+    ).toBeGreaterThanOrEqual(requiredSeparation);
+  });
+
   it("keeps every exact motif valid across a scaled deterministic seed sweep", () => {
     for (const motif of BATTLEFIELD_LAYOUT_MOTIFS) {
       for (let seed = 0; seed < 4; seed += 1) {
@@ -493,6 +579,99 @@ describe("large battlefield generation", () => {
         expect(battlefield.plan.motif).toBe(motif);
         expect(battlefield.metadata.motif).toBe(motif);
         expect(battlefield.metadata.fallbackReason).toBeNull();
+      }
+    }
+  });
+
+  it("varies structure, feature packs, spawns and cavern routes inside every motif", () => {
+    for (const motif of BATTLEFIELD_LAYOUT_MOTIFS) {
+      const battlefields = Array.from({ length: 8 }, (_, seed) =>
+        generateBattlefield(`diversity-corpus-${seed}`, {
+          layoutMotif: motif,
+          width: 960,
+          height: 360,
+        }),
+      );
+      const silhouetteDistances: number[] = [];
+      const occupancyDistances: number[] = [];
+
+      for (let left = 0; left < battlefields.length; left += 1) {
+        const leftBattlefield = battlefields[left];
+        expect(leftBattlefield).toBeDefined();
+        expect(leftBattlefield?.plan.motif).toBe(motif);
+        expect(leftBattlefield?.metadata.fallbackReason).toBeNull();
+        expect(leftBattlefield?.metadata.variation).toEqual(
+          leftBattlefield?.plan.variation,
+        );
+        expect(leftBattlefield?.plan.variation.candidate).toBe(
+          (leftBattlefield?.metadata.attempt ?? 0) - 1,
+        );
+
+        for (
+          let right = left + 1;
+          right < battlefields.length;
+          right += 1
+        ) {
+          const rightBattlefield = battlefields[right];
+          expect(rightBattlefield).toBeDefined();
+          silhouetteDistances.push(
+            mirrorInvariantSilhouetteDistance(
+              leftBattlefield?.metadata.structure.surfaceSilhouette ?? [],
+              rightBattlefield?.metadata.structure.surfaceSilhouette ?? [],
+            ),
+          );
+          occupancyDistances.push(
+            mirrorInvariantOccupancyDistance(
+              leftBattlefield?.metadata.structure.occupancySignature ?? [],
+              rightBattlefield?.metadata.structure.occupancySignature ?? [],
+            ),
+          );
+        }
+      }
+
+      expect(
+        new Set(
+          battlefields.map(
+            (battlefield) => battlefield.plan.variation.signature,
+          ),
+        ).size,
+      ).toBe(battlefields.length);
+      expect(
+        [
+          ...new Set(
+            battlefields.map(
+              (battlefield) =>
+                battlefield.plan.variation.optionalFeatureCount,
+            ),
+          ),
+        ].sort(),
+      ).toEqual([1, 2]);
+      expect(lowerPercentile(silhouetteDistances, 0.25)).toBeGreaterThan(
+        0.02,
+      );
+      expect(lowerPercentile(occupancyDistances, 0.25)).toBeGreaterThan(
+        0.08,
+      );
+
+      for (const spawnIndex of [0, 1] as const) {
+        const positions = battlefields.map(
+          (battlefield) => battlefield.spawns[spawnIndex].x,
+        );
+        const range = Math.max(...positions) - Math.min(...positions);
+        expect(range).toBeGreaterThan(0);
+        if (battlefields[0]?.plan.spawnRoles[spawnIndex].kind === "cave") {
+          expect(range).toBeGreaterThan(20);
+        }
+      }
+
+      if (battlefields[0]?.plan.profile === "cavern") {
+        expect(
+          new Set(
+            battlefields.map(
+              (battlefield) => battlefield.plan.cavernRouteClass,
+            ),
+          ).size,
+        ).toBeGreaterThanOrEqual(2);
       }
     }
   });
@@ -514,6 +693,23 @@ describe("large battlefield generation", () => {
 
     expect(fallbackCount / 64).toBeLessThan(0.05);
     expect(totalAttempts / 64).toBeLessThan(2);
+  });
+
+  it("rejects an unbounded or empty composition retry budget", () => {
+    for (const maxAttempts of [0, 13, 1.5]) {
+      expect(() =>
+        generateBattlefield("invalid-retry-budget", {
+          width: 960,
+          height: 360,
+          layoutRules: {
+            ...DEFAULT_BATTLEFIELD_LAYOUT_RULES,
+            maxAttempts,
+          },
+        }),
+      ).toThrowError(
+        "Battlefield maxAttempts must be an integer between 1 and 12.",
+      );
+    }
   });
 
   it.each(["caves-alpha", "caves-beta", "caves-gamma"])(

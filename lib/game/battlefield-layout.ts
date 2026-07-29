@@ -61,8 +61,17 @@ export const BATTLEFIELD_LAYOUT_PROFILE_BY_MOTIF = {
 export type BattlefieldSpawnKind = "surface" | "cave";
 export type BattlefieldSide = "left" | "right";
 export type CavernLayoutVariant = "surface-vs-cave" | "cave-vs-cave";
+export const BATTLEFIELD_CAVERN_ROUTE_CLASSES = [
+  "direct-rise",
+  "high-arc",
+  "deep-sag",
+] as const;
+export type BattlefieldCavernRouteClass =
+  (typeof BATTLEFIELD_CAVERN_ROUTE_CLASSES)[number];
 export type BattlefieldSurfaceTransition = "smooth" | "linear" | "step";
 export type BattlefieldFeatureMaterial = "soil" | "rock";
+
+const BATTLEFIELD_VARIANT_SLOT_COUNT = 6;
 
 export interface BattlefieldLayoutRules {
   readonly profileWeights: Readonly<
@@ -188,6 +197,19 @@ export interface BattlefieldSpawnRole {
   readonly firingDirection: -1 | 1;
 }
 
+/**
+ * Stable, reader-facing identity for one same-motif composition candidate.
+ * The small slot is useful for galleries while the signature distinguishes
+ * candidates that happen to share that slot.
+ */
+export interface BattlefieldPlanVariation {
+  readonly candidate: number;
+  readonly slot: number;
+  readonly signature: string;
+  readonly optionalFeatureCount: number;
+  readonly cavernRouteClass: BattlefieldCavernRouteClass | null;
+}
+
 export interface BattlefieldPlan {
   readonly seed: number;
   readonly roundNumber: number;
@@ -195,6 +217,8 @@ export interface BattlefieldPlan {
   readonly motif: BattlefieldLayoutMotif;
   readonly terrainSeed: string;
   readonly cavernVariant: CavernLayoutVariant | null;
+  readonly cavernRouteClass: BattlefieldCavernRouteClass | null;
+  readonly variation: BattlefieldPlanVariation;
   readonly surfaceAnchors: readonly BattlefieldSurfaceAnchor[];
   readonly materialFeatures: readonly BattlefieldMaterialFeature[];
   readonly minSpawnSeparationRatio: number;
@@ -213,6 +237,11 @@ export interface BattlefieldPlanOptions {
   readonly profile?: BattlefieldLayoutProfile;
   readonly motif?: BattlefieldLayoutMotif;
   readonly rules?: BattlefieldLayoutRules;
+  /**
+   * Zero-based same-motif composition candidate. Generation retries increment
+   * this value without reselecting the requested profile or motif.
+   */
+  readonly candidate?: number;
 }
 
 interface BattlefieldMotifGrammar {
@@ -844,58 +873,424 @@ function roundedRatio(value: number): number {
   return Math.round(clamp(value, 0, 1) * 1_000_000) / 1_000_000;
 }
 
-function jitterSurfaceAnchors(
+function boundedRatio(value: number, min: number, max: number): number {
+  return Math.round(clamp(value, min, max) * 1_000_000) / 1_000_000;
+}
+
+function parameterizeSurfaceAnchors(
   random: SeededRandom,
+  profile: BattlefieldLayoutProfile,
+  motif: BattlefieldLayoutMotif,
   anchors: readonly BattlefieldSurfaceAnchor[],
 ): readonly BattlefieldSurfaceAnchor[] {
+  const first = anchors[0];
+  const last = anchors.at(-1);
+  if (first === undefined || last === undefined) {
+    throw new Error("Battlefield motif requires surface anchors.");
+  }
+
+  const lift = random.float(-0.032, 0.032);
+  const tilt =
+    motif === "asymmetric-slope"
+      ? random.float(-0.045, 0.006)
+      : random.float(-0.042, 0.042);
+  const reliefScale =
+    profile === "open"
+      ? random.float(0.84, 1.24)
+      : random.float(0.88, 1.2);
+  const centerWarp = random.float(-0.034, 0.034);
+  const regionalWarp = random.float(-0.022, 0.022);
+  const centerRelief = random.float(-0.026, 0.026);
+  const regionalRelief = random.float(-0.018, 0.018);
+
   return anchors.map((current, index) => {
     const previous = anchors[index - 1];
     const next = anchors[index + 1];
-    const xJitter =
-      previous === undefined || next === undefined
-        ? 0
-        : Math.min(
-            0.009,
-            (current.xRatio - previous.xRatio) * 0.2,
-            (next.xRatio - current.xRatio) * 0.2,
-          );
-    const yJitter = index === 0 || index === anchors.length - 1
-      ? 0.006
-      : 0.012;
+    const endpoint = previous === undefined || next === undefined;
+    const horizontalWarp =
+      Math.sin(current.xRatio * Math.PI) * centerWarp +
+      Math.sin(current.xRatio * Math.PI * 2) * regionalWarp;
+    const localX = endpoint ? 0 : random.float(-0.012, 0.012);
+    const minX =
+      previous === undefined
+        ? current.xRatio
+        : previous.xRatio +
+          (current.xRatio - previous.xRatio) * 0.28;
+    const maxX =
+      next === undefined
+        ? current.xRatio
+        : next.xRatio -
+          (next.xRatio - current.xRatio) * 0.28;
+    const baseline =
+      first.yRatio +
+      (last.yRatio - first.yRatio) * current.xRatio;
+    const baseRelief = current.yRatio - baseline;
+    const localY = random.float(
+      endpoint ? -0.01 : -0.018,
+      endpoint ? 0.01 : 0.018,
+    );
+    const shapedY =
+      baseline +
+      baseRelief * reliefScale +
+      lift +
+      tilt * (current.xRatio - 0.5) +
+      Math.sin(current.xRatio * Math.PI) * centerRelief +
+      Math.sin(current.xRatio * Math.PI * 2) * regionalRelief +
+      localY;
 
     return {
-      xRatio: roundedRatio(
-        current.xRatio + random.float(-xJitter, xJitter),
-      ),
-      yRatio: roundedRatio(
-        clamp(
-          current.yRatio + random.float(-yJitter, yJitter),
-          0.12,
-          0.82,
-        ),
-      ),
+      xRatio: endpoint
+        ? roundedRatio(current.xRatio)
+        : boundedRatio(
+            current.xRatio + horizontalWarp + localX,
+            minX,
+            maxX,
+          ),
+      yRatio: boundedRatio(shapedY, 0.12, 0.82),
       transitionToNext: current.transitionToNext,
     };
   });
 }
 
-function cloneMaterialFeature(
+function parameterizeRect(
+  random: SeededRandom,
+  bounds: BattlefieldRatioRect,
+): BattlefieldRatioRect {
+  const widthRatio = boundedRatio(
+    bounds.widthRatio * random.float(0.84, 1.16),
+    0.035,
+    0.82,
+  );
+  const heightRatio = boundedRatio(
+    bounds.heightRatio * random.float(0.8, 1.2),
+    0.012,
+    0.46,
+  );
+  return ratioRect(
+    boundedRatio(
+      bounds.xRatio + random.float(-0.022, 0.022),
+      0.015,
+      0.985 - widthRatio,
+    ),
+    boundedRatio(
+      bounds.yRatio + random.float(-0.024, 0.024),
+      0.08,
+      0.96 - heightRatio,
+    ),
+    widthRatio,
+    heightRatio,
+  );
+}
+
+function parameterizeMaterialFeature(
+  random: SeededRandom,
   feature: BattlefieldMaterialFeature,
 ): BattlefieldMaterialFeature {
   switch (feature.kind) {
-    case "add-island":
-    case "carve-void":
-      return { ...feature };
-    case "carve-arch":
-    case "add-shelf":
-      return { ...feature, bounds: { ...feature.bounds } };
-    case "add-bridge":
+    case "add-island": {
+      const radiusXRatio = boundedRatio(
+        feature.radiusXRatio * random.float(0.78, 1.22),
+        0.012,
+        0.24,
+      );
+      const radiusYRatio = boundedRatio(
+        feature.radiusYRatio * random.float(0.74, 1.26),
+        0.01,
+        0.18,
+      );
       return {
         ...feature,
-        start: { ...feature.start },
-        end: { ...feature.end },
+        centerXRatio: boundedRatio(
+          feature.centerXRatio + random.float(-0.026, 0.026),
+          radiusXRatio + 0.01,
+          0.99 - radiusXRatio,
+        ),
+        centerYRatio: boundedRatio(
+          feature.centerYRatio + random.float(-0.024, 0.024),
+          radiusYRatio + 0.04,
+          0.92 - radiusYRatio,
+        ),
+        radiusXRatio,
+        radiusYRatio,
       };
+    }
+    case "carve-void": {
+      const radiusXRatio = boundedRatio(
+        feature.radiusXRatio * random.float(0.8, 1.2),
+        0.014,
+        0.27,
+      );
+      const radiusYRatio = boundedRatio(
+        feature.radiusYRatio * random.float(0.78, 1.22),
+        0.012,
+        0.42,
+      );
+      return {
+        ...feature,
+        centerXRatio: boundedRatio(
+          feature.centerXRatio + random.float(-0.024, 0.024),
+          radiusXRatio * 0.72,
+          1 - radiusXRatio * 0.72,
+        ),
+        centerYRatio: boundedRatio(
+          feature.centerYRatio + random.float(-0.026, 0.026),
+          0.08,
+          0.92,
+        ),
+        radiusXRatio,
+        radiusYRatio,
+      };
+    }
+    case "carve-arch": {
+      const bounds = parameterizeRect(random, feature.bounds);
+      return {
+        ...feature,
+        bounds,
+        roofThicknessRatio: boundedRatio(
+          feature.roofThicknessRatio * random.float(0.78, 1.24),
+          0.014,
+          Math.min(0.07, bounds.heightRatio * 0.34),
+        ),
+      };
+    }
+    case "add-shelf":
+      return {
+        ...feature,
+        bounds: parameterizeRect(random, feature.bounds),
+      };
+    case "add-bridge": {
+      const centerX = (feature.start.xRatio + feature.end.xRatio) * 0.5;
+      const centerY = (feature.start.yRatio + feature.end.yRatio) * 0.5;
+      const halfX =
+        (feature.end.xRatio - feature.start.xRatio) *
+        0.5 *
+        random.float(0.84, 1.16);
+      const halfY =
+        (feature.end.yRatio - feature.start.yRatio) *
+        0.5 *
+        random.float(0.78, 1.22);
+      const shiftX = random.float(-0.018, 0.018);
+      const shiftY = random.float(-0.022, 0.022);
+      const endpointSkew = random.float(-0.01, 0.01);
+      const sagRatio =
+        Math.abs(feature.sagRatio) < 0.000_001
+          ? random.float(-0.007, 0.012)
+          : feature.sagRatio * random.float(0.68, 1.36) +
+            random.float(-0.003, 0.003);
+      return {
+        ...feature,
+        start: {
+          xRatio: boundedRatio(centerX + shiftX - halfX, 0.015, 0.985),
+          yRatio: boundedRatio(
+            centerY + shiftY - halfY - endpointSkew,
+            0.08,
+            0.9,
+          ),
+        },
+        end: {
+          xRatio: boundedRatio(centerX + shiftX + halfX, 0.015, 0.985),
+          yRatio: boundedRatio(
+            centerY + shiftY + halfY + endpointSkew,
+            0.08,
+            0.9,
+          ),
+        },
+        thicknessRatio: boundedRatio(
+          feature.thicknessRatio * random.float(0.76, 1.28),
+          0.005,
+          0.032,
+        ),
+        sagRatio: boundedRatio(sagRatio, -0.035, 0.055),
+      };
+    }
   }
+}
+
+function secondaryFeaturePalette(
+  motif: BattlefieldLayoutMotif,
+): readonly BattlefieldMaterialFeature[] {
+  switch (motif) {
+    case "island-chain":
+      return [
+        addIsland(0.18, 0.3, 0.055, 0.034, "rock"),
+        addBridge(
+          { xRatio: 0.58, yRatio: 0.48 },
+          { xRatio: 0.69, yRatio: 0.45 },
+          0.008,
+          0.009,
+          "soil",
+        ),
+        carveVoid(0.84, 0.63, 0.032, 0.085, "ellipse", false),
+      ];
+    case "broken-plateaus":
+      return [
+        addIsland(0.5, 0.28, 0.06, 0.032, "rock"),
+        carveArch(ratioRect(0.23, 0.44, 0.11, 0.17), "right", 0.022),
+        addShelf(ratioRect(0.72, 0.52, 0.08, 0.014), "rock"),
+      ];
+    case "asymmetric-slope":
+      return [
+        addBridge(
+          { xRatio: 0.49, yRatio: 0.48 },
+          { xRatio: 0.61, yRatio: 0.41 },
+          0.009,
+          0.008,
+          "rock",
+        ),
+        carveVoid(0.43, 0.61, 0.04, 0.07, "ellipse", false),
+        addIsland(0.55, 0.29, 0.05, 0.03, "soil"),
+      ];
+    case "central-spire":
+      return [
+        addIsland(0.5, 0.16, 0.052, 0.024, "rock"),
+        addShelf(ratioRect(0.36, 0.5, 0.075, 0.014), "rock"),
+        carveVoid(0.64, 0.55, 0.038, 0.065, "ellipse", false),
+      ];
+    case "twin-peaks":
+      return [
+        addIsland(0.5, 0.2, 0.05, 0.024, "rock"),
+        carveArch(ratioRect(0.31, 0.39, 0.12, 0.16), "right", 0.021),
+        addShelf(ratioRect(0.57, 0.48, 0.08, 0.013), "rock"),
+      ];
+    case "fortress-mesa":
+      return [
+        addIsland(0.5, 0.18, 0.058, 0.025, "rock"),
+        addBridge(
+          { xRatio: 0.32, yRatio: 0.47 },
+          { xRatio: 0.42, yRatio: 0.4 },
+          0.009,
+          0.006,
+          "rock",
+        ),
+        carveVoid(0.68, 0.55, 0.038, 0.07, "ellipse", false),
+      ];
+    case "deep-basin":
+      return [
+        addIsland(0.5, 0.42, 0.052, 0.026, "rock"),
+        addShelf(ratioRect(0.26, 0.49, 0.085, 0.014), "soil"),
+        carveArch(ratioRect(0.66, 0.48, 0.11, 0.18), "left", 0.022),
+      ];
+    case "split-chasm":
+      return [
+        addIsland(0.5, 0.31, 0.043, 0.022, "rock"),
+        addShelf(ratioRect(0.31, 0.49, 0.075, 0.014), "rock"),
+        addShelf(ratioRect(0.615, 0.5, 0.075, 0.014), "soil"),
+      ];
+    case "terraced-canyon":
+      return [
+        addIsland(0.5, 0.36, 0.05, 0.024, "rock"),
+        addBridge(
+          { xRatio: 0.43, yRatio: 0.55 },
+          { xRatio: 0.57, yRatio: 0.55 },
+          0.008,
+          0.012,
+          "soil",
+        ),
+        carveVoid(0.72, 0.58, 0.035, 0.07, "ellipse", false),
+      ];
+    case "cliff-cave":
+      return [
+        addIsland(0.46, 0.29, 0.052, 0.026, "rock"),
+        addBridge(
+          { xRatio: 0.49, yRatio: 0.49 },
+          { xRatio: 0.61, yRatio: 0.44 },
+          0.009,
+          0.008,
+          "rock",
+        ),
+        carveVoid(0.57, 0.58, 0.038, 0.075, "ellipse", false),
+      ];
+    case "buried-duel":
+      return [
+        addIsland(0.5, 0.28, 0.052, 0.025, "rock"),
+        addShelf(ratioRect(0.43, 0.65, 0.14, 0.014), "rock"),
+        carveVoid(0.5, 0.53, 0.05, 0.06, "ellipse", false),
+      ];
+    case "underworld":
+      return [
+        addIsland(0.5, 0.24, 0.055, 0.026, "rock"),
+        carveVoid(0.5, 0.53, 0.055, 0.07, "ellipse", false),
+        addShelf(ratioRect(0.45, 0.7, 0.1, 0.014), "rock"),
+      ];
+  }
+}
+
+function parameterizeMaterialFeatures(
+  variationLabel: string,
+  motif: BattlefieldLayoutMotif,
+  slot: number,
+  features: readonly BattlefieldMaterialFeature[],
+): {
+  readonly features: readonly BattlefieldMaterialFeature[];
+  readonly optionalFeatureCount: number;
+} {
+  const parameterized = features.map((feature, index) => {
+    const parameterizedFeature = parameterizeMaterialFeature(
+      new SeededRandom(`${variationLabel}:material:${index}`),
+      feature,
+    );
+    if (
+      motif === "buried-duel" &&
+      parameterizedFeature.kind === "carve-void"
+    ) {
+      return {
+        ...parameterizedFeature,
+        centerYRatio: boundedRatio(
+          parameterizedFeature.centerYRatio + 0.075,
+          0.16,
+          0.9,
+        ),
+      };
+    }
+    return parameterizedFeature;
+  });
+  const palette = secondaryFeaturePalette(motif);
+  const selectionRandom = new SeededRandom(
+    `${variationLabel}:secondary-selection`,
+  );
+  const optionalFeatureCount = 1 + (slot % 2);
+  const start = selectionRandom.integer(0, palette.length);
+  const optional = Array.from(
+    { length: optionalFeatureCount },
+    (_, offset) => {
+      const paletteIndex = (start + offset) % palette.length;
+      return parameterizeMaterialFeature(
+        new SeededRandom(
+          `${variationLabel}:secondary:${paletteIndex}:${offset}`,
+        ),
+        palette[paletteIndex] as BattlefieldMaterialFeature,
+      );
+    },
+  );
+  return {
+    features: [...parameterized, ...optional],
+    optionalFeatureCount,
+  };
+}
+
+function parameterizeSpawnRoles(
+  variationLabel: string,
+  roles: readonly [BattlefieldSpawnRole, BattlefieldSpawnRole],
+): readonly [BattlefieldSpawnRole, BattlefieldSpawnRole] {
+  return roles.map((role, index) => {
+    const random = new SeededRandom(
+      `${variationLabel}:spawn-role:${index}:${role.side}`,
+    );
+    const bandWidth = role.searchMaxXRatio - role.searchMinXRatio;
+    const inset = Math.min(0.012, bandWidth * 0.08);
+    const maxShift = Math.min(0.045, bandWidth * 0.24);
+    return {
+      ...role,
+      preferredXRatio: boundedRatio(
+        role.preferredXRatio + random.float(-maxShift, maxShift),
+        role.searchMinXRatio + inset,
+        role.searchMaxXRatio - inset,
+      ),
+    };
+  }) as unknown as readonly [
+    BattlefieldSpawnRole,
+    BattlefieldSpawnRole,
+  ];
 }
 
 function compatibilityMacro(
@@ -957,9 +1352,15 @@ export function createBattlefieldPlan(
 ): BattlefieldPlan {
   const roundNumber = options.roundNumber ?? 1;
   const rules = options.rules ?? DEFAULT_BATTLEFIELD_LAYOUT_RULES;
+  const candidate = options.candidate ?? 0;
 
   if (!Number.isInteger(roundNumber) || roundNumber <= 0) {
     throw new RangeError("roundNumber must be a positive integer.");
+  }
+  if (!Number.isSafeInteger(candidate) || candidate < 0) {
+    throw new RangeError(
+      "Battlefield plan candidate must be a non-negative safe integer.",
+    );
   }
 
   const { profile, motif } = resolveProfileAndMotif(
@@ -970,31 +1371,67 @@ export function createBattlefieldPlan(
     options.motif,
   );
   const grammar = MOTIF_GRAMMAR[motif];
-  const surfaceAnchors = jitterSurfaceAnchors(
+  const variationLabel =
+    `${String(seed)}:${roundNumber}:${motif}:grammar-v2:` +
+    `candidate:${candidate}`;
+  const slot = new SeededRandom(
+    `${variationLabel}:variant-slot`,
+  ).integer(0, BATTLEFIELD_VARIANT_SLOT_COUNT);
+  const signatureValue = new SeededRandom(
+    `${variationLabel}:variant-signature`,
+  ).nextUint32();
+  const signature = signatureValue.toString(16).padStart(8, "0");
+  const cavernRouteClass =
+    profile === "cavern"
+      ? new SeededRandom(`${variationLabel}:cavern-route`).pick(
+          BATTLEFIELD_CAVERN_ROUTE_CLASSES,
+        )
+      : null;
+  const surfaceAnchors = parameterizeSurfaceAnchors(
     new SeededRandom(
-      `${String(seed)}:${roundNumber}:${motif}:surface-anchors`,
+      `${variationLabel}:surface-anchors`,
     ),
+    profile,
+    motif,
     grammar.surfaceAnchors,
   );
+  const parameterizedFeatures = parameterizeMaterialFeatures(
+    variationLabel,
+    motif,
+    slot,
+    grammar.materialFeatures,
+  );
+  const spawnRoles = parameterizeSpawnRoles(
+    variationLabel,
+    grammar.spawnRoles,
+  );
+  const variation: BattlefieldPlanVariation = {
+    candidate,
+    slot,
+    signature,
+    optionalFeatureCount: parameterizedFeatures.optionalFeatureCount,
+    cavernRouteClass,
+  };
 
   return {
     seed: normalizeSeed(seed),
     roundNumber,
     profile,
     motif,
-    terrainSeed: `${String(seed)}:${roundNumber}:${profile}:terrain`,
+    terrainSeed:
+      `${String(seed)}:${roundNumber}:${profile}:${motif}:` +
+      `variant:${signature}:terrain`,
     cavernVariant: grammar.cavernVariant,
+    cavernRouteClass,
+    variation,
     surfaceAnchors,
-    materialFeatures: grammar.materialFeatures.map(cloneMaterialFeature),
+    materialFeatures: parameterizedFeatures.features,
     minSpawnSeparationRatio: grammar.minSpawnSeparationRatio,
     macro: compatibilityMacro(
       profile,
       grammar.compatibilityWidthRatio,
       surfaceAnchors,
     ),
-    spawnRoles: [
-      { ...grammar.spawnRoles[0] },
-      { ...grammar.spawnRoles[1] },
-    ],
+    spawnRoles,
   };
 }
