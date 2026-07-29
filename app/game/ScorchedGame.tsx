@@ -20,6 +20,7 @@ import {
   availableSelectedWeapon,
   applyInterest,
   buildDiggerPath,
+  buildAirburstFallTrajectories,
   buildFlowPoints,
   buildFunkyChain,
   buildRollPath,
@@ -128,6 +129,7 @@ import {
   scheduleSelectorFocus,
   type SelectorCloseOutcome,
 } from "./selector-focus";
+import { airburstFlightTimings } from "./shot-timing";
 import {
   isShieldSelectorCloseKey,
   nextShieldFocus,
@@ -672,40 +674,34 @@ function buildShot(
         style: "cluster-parent",
       });
 
-      const baseSpeed = Math.max(
-        245,
-        Math.hypot(apex.velocityX, apex.velocityY) / 0.75,
+      const fallTrajectories = buildAirburstFallTrajectories(
+        model.terrain,
+        apex,
+        weaponId,
+        model.wind,
       );
-      const baseAngle = 34;
-      const baseDirection = apex.velocityX >= 0 ? 1 : -1;
+      const fallTimings = airburstFlightTimings(fallTrajectories);
 
-      for (let index = 0; index < childCount; index += 1) {
-        const centered = index - (childCount - 1) / 2;
-        const offset = centered * (weaponId === "deathsHead" ? 5.25 : 9);
-        const child = simulateTrajectory(model.terrain, {
-          origin: { x: apex.x, y: apex.y },
-          angleDegrees: clamp(baseAngle + offset, 4, 86),
-          power: baseSpeed * (1 + centered * 0.018),
-          direction: baseDirection,
-          wind: model.wind,
-          projectileRadius: weaponId === "deathsHead" ? 2.2 : 1.5,
-          maxTime: 7,
-        }).points;
+      fallTrajectories.forEach(({ points: child }, index) => {
+        const timing = fallTimings[index];
+        if (timing === undefined) {
+          throw new Error(`Missing airburst timing at index ${index}`);
+        }
         const childPath = samplePath(child, 100);
         const childImpact =
           childPath[childPath.length - 1] ?? { x: apex.x, y: apex.y };
         segments.push({
           path: childPath,
-          startsAt: 0.41,
-          endsAt: 0.76,
+          startsAt: timing.startsAt,
+          endsAt: timing.endsAt,
           style: "cluster-child",
         });
         impactPoints.push(childImpact);
-        impactTimes.push(0.77 + index * 0.008);
-      }
+        impactTimes.push(timing.impactAt);
+      });
 
       finalPoint = impactPoints[Math.floor(childCount / 2)] ?? impact;
-      resolvedAt = 0.78;
+      resolvedAt = Math.max(...impactTimes, 0.78);
       endsAt = 0.98;
       duration =
         (weaponId === "deathsHead" ? 3_900 : 3_350) * durationScale;

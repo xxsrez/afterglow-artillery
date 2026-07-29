@@ -144,6 +144,21 @@ Classic, где default начинается с бесконечной Baby Miss
 - Оружие может лететь по баллистике, разделяться, катиться по поверхности,
   проникать в материал, создавать материал или действовать энергетическим
   лучом.
+- MIRV и Death's Head являются единственными apogee-airburst mechanics Quick
+  Demo. Carrier раскрывается только при найденном апогее; ранний контакт
+  сохраняет source-backed fizzle для MIRV и применяет ту же функциональную
+  модель к Death's Head как его описанному аналогу. После раскрытия все
+  дочерние warheads наследуют одну не-восходящую вертикальную скорость, а их
+  horizontal velocity образует симметричную арифметическую прогрессию.
+  Конкретные delta `24` для MIRV и `16` для Death's Head являются
+  **НЕ канонической** provisional policy Quick Demo из
+  [ADR 0005](../decisions/0005-composite-payload-resolution.md): manual
+  подтверждает момент раскрытия, функциональную связь и count `5 / 9`, но не
+  публикует spread или child velocity.
+- Leap Frog, Funky Bomb и Sandhog-семейство сохраняют собственные sequential,
+  impact-chain и underground deliveries. Napalm, Hot Napalm и Liquid Dirt
+  остаются flow mechanics; catalog delivery и `count > 1` сами по себе не
+  включают airburst-поведение.
 - Сложный payload разрешается в стабильном порядке, заданном данными оружия.
 - После payload рельеф стабилизируется, танки падают или перемещаются, затем
   применяются fall damage, parachute и условия гибели.

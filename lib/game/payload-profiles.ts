@@ -11,6 +11,9 @@ export interface AirburstPayloadProfile {
   readonly childCount: number;
   readonly warheadRadius: number;
   readonly warheadDamage: number;
+  /** Provisional Quick Demo spread in logical velocity units per second. */
+  readonly horizontalVelocityDelta: number;
+  readonly projectileRadius: number;
 }
 
 export interface LeapFrogImpactProfile {
@@ -35,12 +38,16 @@ const AIRBURST_PAYLOAD_PROFILES = Object.freeze({
     childCount: mirvResolution.count,
     warheadRadius: missileResolution.radius,
     warheadDamage: missileResolution.damage,
+    horizontalVelocityDelta: 24,
+    projectileRadius: 1.5,
   }),
   deathsHead: Object.freeze({
     weaponId: "deathsHead",
     childCount: deathsHeadResolution.count,
     warheadRadius: deathsHeadResolution.radius,
     warheadDamage: deathsHeadResolution.damage,
+    horizontalVelocityDelta: 16,
+    projectileRadius: 2.2,
   }),
 } satisfies Readonly<
   Record<AirburstPayloadWeaponId, AirburstPayloadProfile>

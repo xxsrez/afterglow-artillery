@@ -1,7 +1,7 @@
 # Спецификация эффектов оружия
 
 - **Статус:** presentation-контракт и шкала envelopes полного Quick Demo arsenal приняты
-- **Обновлено:** 2026-07-28
+- **Обновлено:** 2026-07-29
 - **Область:** VFX, camera response, звук и читаемость оружия
 
 ## 1. Цель
@@ -116,6 +116,22 @@ MIRV создаёт пять Missile-equivalent профилей, Death Crown �
 тяжёлых provisional профилей, а три boundary Triple Hop последовательно
 показывают собственные радиусы. Числа и граница каноничности зафиксированы в
 [ADR 0005](../decisions/0005-composite-payload-resolution.md).
+
+MIRV и Death Crown раскрываются в апогее в один синхронный падающий строй:
+дочерние trajectories не получают нового восходящего angle, имеют общую
+вертикальную фазу и расходятся только равными horizontal velocity offsets.
+Presentation запускает их одновременно и отображает каждую trajectory по её
+фактической simulated duration; короткий ранний impact заканчивается раньше, а
+не растягивается до времени самой длинной trajectory. Ветер входит в общий
+simulation input и не пересчитывается VFX-слоем. Full, Balanced и Reduced
+используют те же centers, count, radius, damage и terrain operations.
+
+Точные velocity delta `24` для MIRV и `16` для Death Crown — собственная
+provisional policy Quick Demo, а не установленная физика Scorched Earth 1.5.
+Она применяется по runtime behavior `airburst` ровно к этим двум weapons.
+Совпадающий catalog delivery `airburst-cluster` у Funky Bomb не переводит её
+seeded impact-chain в apogee fall model; Triple Hop, Sandhog и flow mechanics
+также сохраняют отдельные choreography.
 
 ### Shield response
 

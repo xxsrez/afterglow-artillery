@@ -16,6 +16,8 @@ describe("composite payload profiles", () => {
     expect(profile.childCount).toBe(5);
     expect(profile.warheadRadius).toBe(missile.radius);
     expect(profile.warheadDamage).toBe(missile.damage);
+    expect(profile.horizontalVelocityDelta).toBe(24);
+    expect(profile.projectileRadius).toBe(1.5);
   });
 
   it("keeps all nine Death's Head warheads individually heavy", () => {
@@ -26,6 +28,8 @@ describe("composite payload profiles", () => {
     expect(profile.childCount).toBe(9);
     expect(profile.warheadRadius).toBe(deathsHead.radius);
     expect(profile.warheadDamage).toBe(deathsHead.damage);
+    expect(profile.horizontalVelocityDelta).toBe(16);
+    expect(profile.projectileRadius).toBe(2.2);
     expect(profile.warheadRadius).toBeGreaterThan(missile.radius);
     expect(profile.warheadDamage).toBeGreaterThan(missile.damage);
   });

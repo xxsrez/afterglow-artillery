@@ -1,6 +1,13 @@
 import { SeededRandom } from "./random";
 import { TerrainGrid } from "./terrain";
-import type { TrajectoryPoint } from "./ballistics";
+import {
+  simulateTrajectoryFromVelocity,
+  type TrajectoryPoint,
+} from "./ballistics";
+import {
+  airburstPayloadProfile,
+  type AirburstPayloadWeaponId,
+} from "./payload-profiles";
 import type { Vector2 } from "./types";
 
 function clamp(value: number, min: number, max: number): number {
@@ -151,6 +158,51 @@ export function buildUndergroundFan(
   }
 
   return paths;
+}
+
+export interface AirburstFallTrajectory {
+  readonly index: number;
+  readonly horizontalVelocityOffset: number;
+  readonly points: readonly TrajectoryPoint[];
+}
+
+/**
+ * Builds the mechanical fall formation for the two apogee-splitting payloads.
+ * Every child inherits the carrier's non-upward vertical velocity and receives
+ * one evenly spaced horizontal offset from its family profile.
+ */
+export function buildAirburstFallTrajectories(
+  terrain: TerrainGrid,
+  apex: TrajectoryPoint,
+  weaponId: AirburstPayloadWeaponId,
+  wind: number,
+): readonly AirburstFallTrajectory[] {
+  const profile = airburstPayloadProfile(weaponId);
+  const verticalVelocity = Math.max(0, apex.velocityY);
+
+  return Object.freeze(
+    Array.from({ length: profile.childCount }, (_, index) => {
+      const centered = index - (profile.childCount - 1) / 2;
+      const horizontalVelocityOffset =
+        centered * profile.horizontalVelocityDelta;
+      const trajectory = simulateTrajectoryFromVelocity(terrain, {
+        origin: { x: apex.x, y: apex.y },
+        velocity: {
+          x: apex.velocityX + horizontalVelocityOffset,
+          y: verticalVelocity,
+        },
+        wind,
+        projectileRadius: profile.projectileRadius,
+        maxTime: 7,
+      }).points;
+
+      return Object.freeze({
+        index,
+        horizontalVelocityOffset,
+        points: trajectory,
+      });
+    }),
+  );
 }
 
 export function trajectoryApexIndex(
