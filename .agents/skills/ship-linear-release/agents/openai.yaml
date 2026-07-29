@@ -1,0 +1,7 @@
+interface:
+  display_name: "Ship Linear Release"
+  short_description: "Готовит задачи параллельно и выпускает batch"
+  default_prompt: "Используй $ship-linear-release и задействуй три воркера, чтобы подготовить Linear-задачи в изолированных worktrees и выпустить их одним проверенным batch."
+
+policy:
+  allow_implicit_invocation: false
