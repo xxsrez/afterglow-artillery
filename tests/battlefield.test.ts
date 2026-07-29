@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BATTLEFIELD_LAYOUT_MOTIFS,
+  BATTLEFIELD_LAYOUT_MOTIFS_BY_PROFILE,
+  DEFAULT_BATTLEFIELD_LAYOUT_RULES,
   Material,
   TerrainGrid,
   VIEWPORT_HEIGHT,
@@ -11,6 +14,9 @@ import {
   createBattlefieldPlan,
   generateBattlefield,
   generateTerrain,
+  measureBattlefieldStructure,
+  mirrorInvariantSilhouetteDistance,
+  type BattlefieldLayoutMotif,
   type BattlefieldLayoutProfile,
 } from "../lib/game/index";
 
@@ -315,7 +321,11 @@ describe("large battlefield generation", () => {
         expect(battlefield.metadata.attempt).toBeLessThanOrEqual(4);
         expect(
           battlefield.metadata.topology.horizontalSeparation,
-        ).toBeGreaterThanOrEqual(Math.round(WORLD_WIDTH * 0.56));
+        ).toBeGreaterThanOrEqual(
+          Math.round(
+            WORLD_WIDTH * battlefield.plan.minSpawnSeparationRatio,
+          ),
+        );
 
         if (profile === "ridge") {
           expect(battlefield.metadata.topology.ridgeHeight).toBeGreaterThanOrEqual(
@@ -324,7 +334,10 @@ describe("large battlefield generation", () => {
           expect(battlefield.metadata.topology.featureWidth).toBeGreaterThanOrEqual(
             160,
           );
-        } else if (profile === "valley") {
+        } else if (
+          profile === "valley" &&
+          battlefield.plan.motif !== "split-chasm"
+        ) {
           expect(battlefield.metadata.topology.basinDepth).toBeGreaterThanOrEqual(
             WORLD_HEIGHT * 0.1,
           );
@@ -339,6 +352,150 @@ describe("large battlefield generation", () => {
       }
     },
   );
+
+  it("realizes every motif as a validated composition with blind structural separation", () => {
+    const structures = new Map<
+      BattlefieldLayoutMotif,
+      ReturnType<typeof measureBattlefieldStructure>
+    >();
+
+    for (const motif of BATTLEFIELD_LAYOUT_MOTIFS) {
+      const battlefield = generateBattlefield("motif-comparison-seed", {
+        layoutMotif: motif,
+      });
+
+      expect(battlefield.plan.motif).toBe(motif);
+      expect(battlefield.metadata.motif).toBe(motif);
+      expect(battlefield.metadata.fallbackReason).toBeNull();
+      expect(battlefield.metadata.structure).toEqual(
+        measureBattlefieldStructure(battlefield.terrain),
+      );
+      structures.set(motif, battlefield.metadata.structure);
+
+      if (motif === "island-chain" || motif === "asymmetric-slope") {
+        expect(
+          battlefield.metadata.structure.floatingSolidComponentCount,
+        ).toBeGreaterThanOrEqual(1);
+      }
+      if (motif === "asymmetric-slope") {
+        expect(
+          battlefield.metadata.topology.verticalSeparation,
+        ).toBeGreaterThanOrEqual(WORLD_HEIGHT * 0.3);
+      }
+      if (motif === "broken-plateaus" || motif === "fortress-mesa") {
+        expect(
+          battlefield.metadata.structure.cliffCount,
+        ).toBeGreaterThanOrEqual(2);
+      }
+      if (motif === "buried-duel" || motif === "underworld") {
+        expect(
+          battlefield.metadata.structure.undergroundOpenAirSpan,
+        ).toBeGreaterThanOrEqual(WORLD_WIDTH * 0.55);
+        expect(
+          battlefield.spawns.every((spawn) => spawn.kind === "cave"),
+        ).toBe(true);
+      }
+    }
+
+    for (const motifs of Object.values(
+      BATTLEFIELD_LAYOUT_MOTIFS_BY_PROFILE,
+    )) {
+      for (let left = 0; left < motifs.length; left += 1) {
+        for (let right = left + 1; right < motifs.length; right += 1) {
+          const leftStructure = structures.get(
+            motifs[left] as BattlefieldLayoutMotif,
+          );
+          const rightStructure = structures.get(
+            motifs[right] as BattlefieldLayoutMotif,
+          );
+          expect(leftStructure).toBeDefined();
+          expect(rightStructure).toBeDefined();
+          expect(
+            mirrorInvariantSilhouetteDistance(
+              leftStructure?.surfaceSilhouette ?? [],
+              rightStructure?.surfaceSilhouette ?? [],
+            ),
+          ).toBeGreaterThan(0.035);
+        }
+      }
+    }
+  });
+
+  it("keeps motif geometry authoritative over the legacy random cave pass", () => {
+    const generated = generateBattlefield("noise-contract", {
+      layoutMotif: "central-spire",
+    });
+    const explicitNoCaves = generateBattlefield("noise-contract", {
+      layoutMotif: "central-spire",
+      caveCount: 0,
+      tunnelCount: 0,
+    });
+    const explicitlyInjectedCaves = generateBattlefield(
+      "noise-contract",
+      {
+        layoutMotif: "central-spire",
+        caveCount: 8,
+        tunnelCount: 12,
+      },
+    );
+
+    expect(battlefieldGridHash(generated.terrain)).toBe(
+      battlefieldGridHash(explicitNoCaves.terrain),
+    );
+    expect(battlefieldGridHash(generated.terrain)).not.toBe(
+      battlefieldGridHash(explicitlyInjectedCaves.terrain),
+    );
+  });
+
+  it("measures rendered feature width instead of trusting the plan envelope", () => {
+    const battlefield = generateBattlefield("measured-width", {
+      layoutMotif: "central-spire",
+    });
+    const compatibilityEnvelope = Math.round(
+      battlefield.plan.macro.widthRatio * battlefield.terrain.width,
+    );
+
+    expect(battlefield.metadata.topology.featureWidth).toBeGreaterThanOrEqual(
+      160,
+    );
+    expect(battlefield.metadata.topology.featureWidth).not.toBe(
+      compatibilityEnvelope,
+    );
+  });
+
+  it("never silently replaces an exact motif override with another motif", () => {
+    expect(() =>
+      generateBattlefield("impossible-exact-motif", {
+        layoutMotif: "central-spire",
+        layoutRules: {
+          ...DEFAULT_BATTLEFIELD_LAYOUT_RULES,
+          minFeatureHeightRatio: 0.9,
+          minFeatureWidth: 10_000,
+        },
+      }),
+    ).toThrowError(
+      "Unable to validate exact battlefield motif central-spire: ridge-topology.",
+    );
+  });
+
+  it("keeps every exact motif valid across a scaled deterministic seed sweep", () => {
+    for (const motif of BATTLEFIELD_LAYOUT_MOTIFS) {
+      for (let seed = 0; seed < 4; seed += 1) {
+        const battlefield = generateBattlefield(
+          `scaled-motif-${seed}`,
+          {
+            layoutMotif: motif,
+            width: 960,
+            height: 360,
+          },
+        );
+
+        expect(battlefield.plan.motif).toBe(motif);
+        expect(battlefield.metadata.motif).toBe(motif);
+        expect(battlefield.metadata.fallbackReason).toBeNull();
+      }
+    }
+  });
 
   it("keeps retries bounded with a low deterministic fallback rate", () => {
     let fallbackCount = 0;

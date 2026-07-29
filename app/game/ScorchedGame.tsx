@@ -2,6 +2,7 @@
 
 import {
   CLASSIC_INTEREST_RATE,
+  BATTLEFIELD_LAYOUT_MOTIFS,
   EXPERIMENTAL_ULTIMATES,
   MAX_INVENTORY,
   Material,
@@ -26,6 +27,7 @@ import {
   buildRollPath,
   buildUndergroundFan,
   type BattlefieldLayoutProfile,
+  type BattlefieldLayoutMotif,
   type BattlefieldSpawnKind,
   calculateInterest,
   consumePlayerWeapon,
@@ -210,7 +212,9 @@ interface ShieldMatchEvent {
 interface GameModel {
   seed: number;
   battlefieldProfile: BattlefieldLayoutProfile;
+  battlefieldMotif: BattlefieldLayoutMotif;
   battlefieldProfileOverride: BattlefieldLayoutProfile | null;
+  battlefieldMotifOverride: BattlefieldLayoutMotif | null;
   battlefieldSpawnKinds: readonly [
     BattlefieldSpawnKind,
     BattlefieldSpawnKind,
@@ -500,10 +504,12 @@ function makePlayer(
 function createGame(
   seed = 41_705,
   battlefieldProfileOverride: BattlefieldLayoutProfile | null = null,
+  battlefieldMotifOverride: BattlefieldLayoutMotif | null = null,
 ): GameModel {
   const battlefield = generateBattlefield(seed, {
     roundNumber: 1,
     layoutProfile: battlefieldProfileOverride ?? undefined,
+    layoutMotif: battlefieldMotifOverride ?? undefined,
   });
   const { terrain, spawns } = battlefield;
   const windSnapshot = createWindSnapshot(seed, QUICK_DEMO_WIND_RULES);
@@ -511,7 +517,9 @@ function createGame(
   return {
     seed,
     battlefieldProfile: battlefield.plan.profile,
+    battlefieldMotif: battlefield.plan.motif,
     battlefieldProfileOverride,
+    battlefieldMotifOverride,
     battlefieldSpawnKinds: [
       battlefield.spawns[0].kind,
       battlefield.spawns[1].kind,
@@ -543,16 +551,63 @@ function createGame(
   };
 }
 
+function battlefieldSeedFromLocation(): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const value = new URLSearchParams(window.location.search).get("seed");
+  if (value === null || value.trim() === "") {
+    return null;
+  }
+
+  const seed = Number(value);
+  return Number.isSafeInteger(seed) && seed >= 0
+    ? seed
+    : null;
+}
+
+function freshBattlefieldSeed(): number {
+  const explicitSeed = battlefieldSeedFromLocation();
+  if (explicitSeed !== null) {
+    return explicitSeed;
+  }
+
+  const randomSeed = new Uint32Array(1);
+  window.crypto.getRandomValues(randomSeed);
+  return randomSeed[0] ?? 41_705;
+}
+
 function battlefieldProfileFromLocation(): BattlefieldLayoutProfile | null {
   if (typeof window === "undefined") {
     return null;
   }
-  const profile = new URLSearchParams(window.location.search).get("layout");
+  const params = new URLSearchParams(window.location.search);
+  if (
+    BATTLEFIELD_LAYOUT_MOTIFS.includes(
+      params.get("motif") as BattlefieldLayoutMotif,
+    )
+  ) {
+    return null;
+  }
+  const profile = params.get("layout");
   return profile === "open" ||
     profile === "ridge" ||
     profile === "valley" ||
     profile === "cavern"
     ? profile
+    : null;
+}
+
+function battlefieldMotifFromLocation(): BattlefieldLayoutMotif | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const motif = new URLSearchParams(window.location.search).get("motif");
+  return BATTLEFIELD_LAYOUT_MOTIFS.includes(
+    motif as BattlefieldLayoutMotif,
+  )
+    ? (motif as BattlefieldLayoutMotif)
     : null;
 }
 
@@ -2041,9 +2096,11 @@ function prepareNextRound(model: GameModel): void {
   const battlefield = generateBattlefield(model.seed, {
     roundNumber: model.round,
     layoutProfile: model.battlefieldProfileOverride ?? undefined,
+    layoutMotif: model.battlefieldMotifOverride ?? undefined,
   });
   model.terrain = battlefield.terrain;
   model.battlefieldProfile = battlefield.plan.profile;
+  model.battlefieldMotif = battlefield.plan.motif;
   model.battlefieldSpawnKinds = [
     battlefield.spawns[0].kind,
     battlefield.spawns[1].kind,
@@ -4040,13 +4097,16 @@ export default function ScorchedGame() {
 
   useEffect(() => {
     const profileOverride = battlefieldProfileFromLocation();
+    const motifOverride = battlefieldMotifFromLocation();
     if (
-      profileOverride !== null &&
-      gameRef.current.battlefieldProfileOverride !== profileOverride
+      (profileOverride !== null || motifOverride !== null) &&
+      (gameRef.current.battlefieldProfileOverride !== profileOverride ||
+        gameRef.current.battlefieldMotifOverride !== motifOverride)
     ) {
       gameRef.current = createGame(
         gameRef.current.seed,
         profileOverride,
+        motifOverride,
       );
       cameraRef.current = createCamera(
         cameraTargetForTank(
@@ -5887,15 +5947,30 @@ export default function ScorchedGame() {
   );
 
   const startMatch = useCallback(() => {
-    const game = gameRef.current;
+    const preview = gameRef.current;
     const nextScreen = transitionSettingsScreen(
       settingsScreen,
       "start-match",
-      game.phase,
+      preview.phase,
     );
     if (nextScreen === settingsScreen) {
       return;
     }
+
+    const game = createGame(
+      freshBattlefieldSeed(),
+      preview.battlefieldProfileOverride,
+      preview.battlefieldMotifOverride,
+    );
+    game.mode = preview.mode;
+    game.audio = preview.audio;
+    game.audioAvailable = preview.audioAvailable;
+    game.audioDiagnostic = preview.audioDiagnostic;
+    game.reducedMotion = preview.reducedMotion;
+    game.effectLevel = preview.effectLevel;
+    gameRef.current = game;
+    terrainCacheRef.current = null;
+
     const audioActivation = ensureAudio();
     setSettingsScreen(nextScreen);
     cameraModeRef.current = "auto";
@@ -6113,6 +6188,7 @@ export default function ScorchedGame() {
     gameRef.current = createGame(
       previous.seed + 1,
       previous.battlefieldProfileOverride,
+      previous.battlefieldMotifOverride,
     );
     gameRef.current.audio = previous.audio;
     gameRef.current.audioAvailable = previous.audioAvailable;
@@ -6333,10 +6409,13 @@ export default function ScorchedGame() {
       data-client-ready={clientReady ? "true" : "false"}
       data-stage-width={stageMetrics.width}
       data-stage-height={stageMetrics.height}
+      data-match-seed={model.seed}
       data-battlefield-profile={model.battlefieldProfile}
+      data-battlefield-motif={model.battlefieldMotif}
       data-left-spawn-kind={model.battlefieldSpawnKinds[0]}
       data-right-spawn-kind={model.battlefieldSpawnKinds[1]}
       data-layout-override={model.battlefieldProfileOverride ?? "none"}
+      data-motif-override={model.battlefieldMotifOverride ?? "none"}
       data-testid="game-container"
     >
       <canvas
@@ -6363,7 +6442,7 @@ export default function ScorchedGame() {
         >
           <span className={styles.cameraMeta}>
             Карта {model.terrain.width}×{model.terrain.height} ·{" "}
-            {model.battlefieldProfile}
+            {model.battlefieldMotif}
           </span>
           <button
             type="button"

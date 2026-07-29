@@ -1,6 +1,7 @@
 export * from "./ballistics";
 export * from "./battlefield";
 export * from "./battlefield-layout";
+export * from "./battlefield-structure";
 export * from "./constants";
 export * from "./demo-behaviors";
 export * from "./demo-shot-paths";

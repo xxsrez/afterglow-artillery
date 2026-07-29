@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 
 import {
-  BATTLEFIELD_LAYOUT_PROFILES,
+  BATTLEFIELD_LAYOUT_MOTIFS,
   findSpawnSites,
   generateBattlefield,
   generateTerrain,
@@ -12,17 +12,17 @@ if (mode !== "baseline" && mode !== "current") {
   throw new Error("Usage: benchmark-battlefield.ts baseline|current");
 }
 
-const corpus = BATTLEFIELD_LAYOUT_PROFILES.flatMap((profile) =>
+const corpus = BATTLEFIELD_LAYOUT_MOTIFS.flatMap((motif) =>
   Array.from(
-    { length: 4 },
-    (_, index) => ({ profile, seed: `benchmark-${profile}-${index + 1}` }),
+    { length: 2 },
+    (_, index) => ({ motif, seed: `benchmark-${motif}-${index + 1}` }),
   ),
 );
 const start = performance.now();
 
 for (const item of corpus) {
   if (mode === "current") {
-    generateBattlefield(item.seed, { layoutProfile: item.profile });
+    generateBattlefield(item.seed, { layoutMotif: item.motif });
   } else {
     const terrain = generateTerrain(item.seed);
     findSpawnSites(terrain, {

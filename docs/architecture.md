@@ -140,13 +140,25 @@ CSS pixels, camera и logical world живёт в одном adapter. Текущ
 физическому pixel телефона создаст разный баланс на разных экранах.
 
 Генерация battlefield разделена на planner и rasterizer. Чистый
-`BattlefieldPlan` выбирает `open`, `ridge`, `valley` или `cavern`, задаёт
-macro anchors и роли surface/cave для каждой стартовой позиции. Rasterizer
-строит material grid, после чего paired spawn solver и validator измеряют уже
-фактическую топологию. Surface shelf и cave floor используют разные операции:
-подземная площадка не очищает материал от верхней границы мира и сохраняет
-roof. До четырёх адресуемых seed попыток и детерминированный fallback
-исключают неограниченный поиск. Полный контракт и пороги приняты в
+`BattlefieldPlan` выбирает семейство `open`, `ridge`, `valley` или `cavern`,
+затем один из 12 motif. Plan содержит многоточечный surface skeleton,
+упорядоченные 2D material-операции (`add-island`, `carve-void`,
+`carve-arch`, `add-bridge`, `add-shelf`) и отдельные spawn regions.
+Rasterizer сначала строит крупную композицию, затем сохраняет только
+ограниченный локальный residual seeded terrain. Поэтому height noise не может
+самостоятельно превратить разные motif в одну плавную поверхность. Legacy
+random cave/tunnel pass по умолчанию отключён для всех motif: отдельные
+пустоты создаются только планом и cave-spawn builder, иначе скрытая случайная
+сеть снова стала бы неуправляемым вторым автором карты.
+
+После material operations paired spawn solver и validator измеряют уже
+фактическую топологию: robust relief, cliffs, отдельные solid components,
+roofed coverage/span, cave connectivity, а ширина ridge/basin измеряется по
+полноразмерному rasterized surface, а не берётся из template.
+Surface shelf и cave floor используют разные операции: подземная площадка не
+очищает материал от верхней границы мира и сохраняет roof. До четырёх
+адресуемых seed попыток и детерминированный fallback исключают неограниченный
+поиск. Полный контракт и пороги приняты в
 [ADR 0007](decisions/0007-tactical-battlefield-layouts.md).
 
 ## 6. Детерминизм и данные оружия

@@ -1,37 +1,54 @@
-# Проверка тактических battlefield layouts 0.1
+# Проверка композиционных battlefield layouts 0.1
 
-- **Статус:** воспроизводимый release-сценарий
-- **Profiles:** `open`, `ridge`, `valley`, `cavern`
+- **Статус:** release-candidate; пользовательская приёмка не завершена
+- **Families:** `open`, `ridge`, `valley`, `cavern`
+- **Motifs:** 12, по три на семейство
 - **Размер fixture:** `2880×720`
 
 ## Gallery
 
-![Gallery 4×4](battlefield-layout-gallery.svg)
+![Labelled motif gallery 3×4](battlefield-layout-gallery.svg)
 
-Gallery пересобирается командой `npm run gallery:battlefield`. Каждая строка
-фиксирует один profile, каждый столбец — отдельный seed. Круг означает surface
-spawn, квадрат — cave spawn; цвет различает игроков. Под картой записана
-основная topology metric и номер попытки.
+![Blind shuffled gallery](battlefield-layout-blind-gallery.svg)
+
+Обе gallery пересобираются командой `npm run gallery:battlefield`. Labelled
+вариант показывает по три motif каждого семейства на общем seed. Blind
+вариант перемешивает те же 12 классов и скрывает labels: различие должно
+читаться по материалу и spawn markers. Круг означает surface spawn, квадрат —
+cave spawn; цвет различает игроков.
 
 ## Автоматические критерии
 
 `tests/battlefield.test.ts` проверяет:
 
-- plan sweep `512` seeds: каждый профиль не меньше `15%`, ни один не больше
+- plan sweep `512` seeds: каждое семейство не меньше `15%`, ни одно не больше
   `50%`, три раунда не повторяют один профиль;
 - replay equality для plan, grid hash, spawns, attempt/fallback и metadata;
-- не меньше трёх полноразмерных fixtures каждого профиля;
+- полноразмерный fixture каждого из 12 motif;
 - `ridge`/`valley` feature не меньше `10%` высоты мира и `160` world units;
+- feature width измеряется по final grid, а не читается из plan envelope;
+- island/asymmetric motif сохраняют отдельный floating component;
+- `asymmetric-slope` разводит spawn по высоте минимум на `30%` высоты мира;
+- plateau/mesa сохраняют минимум два cliff transitions;
+- `buried-duel`/`underworld` сохраняют широкие roofed coverage и air span;
+- silhouette distance между motif одного семейства на общем seed больше
+  `0.035`, включая зеркальное сопоставление;
 - surface support/open sky и cave floor/headroom/roof/mouth/firing exit;
 - отдельные `surface-vs-cave` и `cave-vs-cave`;
+- default motif generation не наследует случайный legacy cave pass;
+- exact motif либо остаётся exact, либо завершается явной ошибкой — fallback
+  не имеет права незаметно подменить fixture;
+- scaled sweep проходит все 12 motif на нескольких seeds;
 - bounded retry corpus с fallback rate меньше `5%` и средним числом попыток
   меньше `2`.
 
 ## Browser smoke
 
-Query `?layout=open|ridge|valley|cavern` принудительно выбирает fixture profile
-для текущего матча и отражается в `data-battlefield-profile` и
-`data-*-spawn-kind`. На каждом профиле:
+Query `?layout=open|ridge|valley|cavern` принудительно выбирает семейство,
+`?motif=<id>` — точный motif, `?seed=<integer>` — воспроизводимый match seed.
+Без `seed` новый матч получает новый явный browser seed. Значения отражаются
+в `data-match-seed`, `data-battlefield-profile`,
+`data-battlefield-motif` и `data-*-spawn-kind`. На representative motif:
 
 1. выключить music и SFX до начала теста;
 2. начать Quick Match и проверить полный контур через minimap;
@@ -47,18 +64,10 @@ Query `?layout=open|ridge|valley|cavern` принудительно выбира
 ## Performance corpus
 
 `npm run benchmark:battlefield -- baseline|current` строит одинаковый corpus
-из `16` полноразмерных карт. Baseline повторяет прежний pipeline
+из `24` полноразмерных карт: по два seed каждого motif. Baseline повторяет
+прежний pipeline
 `generateTerrain → findSpawnSites`; current использует profile planner,
-rasterization, paired/cave spawn и final validator. Результаты release-кандидата
-на локальном Mac:
-
-| Pipeline | Domain time, 16 maps | Среднее | Maximum RSS процесса |
-|---|---:|---:|---:|
-| baseline | `179.6 ms` | `11.2 ms/map` | `107,364,352 B` |
-| current | `615.0 ms` | `38.4 ms/map` | `102,793,216 B` |
-
-Замер выполнен отдельным процессом на каждый режим через `/usr/bin/time -l`.
-Current дороже по CPU из-за pair scoring, cave construction и проверки
-фактического grid, но на этом corpus не увеличил maximum RSS. Это локальная
-характеристика generation step; вывод не обобщается на frame time или
-физические телефоны.
+2D material operations, paired/cave spawn, independent structure metrics и
+final validator. Актуальные числа фиксируются на release commit отдельным
+процессом через `/usr/bin/time -l`; локальный generation benchmark не
+обобщается на frame time или физические телефоны.
