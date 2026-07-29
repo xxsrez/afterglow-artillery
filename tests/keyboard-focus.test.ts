@@ -27,7 +27,7 @@ function dispatchAimingKey(
   const onKeyDown = (event: KeyboardEvent) => {
     action = getGameKeyboardAction(event.code, {
       phase,
-      paused: false,
+      settingsOpen: false,
       target: event.target,
     });
     if (action !== null) {
@@ -93,7 +93,7 @@ describe("weapon selector focus handoff", () => {
     const onKeyDown = (event: KeyboardEvent) => {
       const action = getGameKeyboardAction(event.code, {
         phase,
-        paused: false,
+        settingsOpen: false,
         target: event.target,
       });
       if (action?.type === "fire") {

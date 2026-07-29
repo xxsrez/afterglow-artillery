@@ -62,6 +62,9 @@ test("server-renders the game shell and production metadata", async () => {
   assert.match(html, /ARTILLERY/);
   assert.match(html, /Локальный бой/);
   assert.match(html, /Поверните телефон/);
+  assert.match(html, /Настройки матча/);
+  assert.match(html, /Матч начнётся[\s\S]*после явного запуска/);
+  assert.match(html, /Начать Quick Demo/);
   assert.match(html, /Проверить звук/);
   assert.match(
     html,

@@ -129,6 +129,11 @@ import {
   scheduleSelectorFocus,
   type SelectorCloseOutcome,
 } from "./selector-focus";
+import {
+  settingsScreenAfterPageLifecycle,
+  transitionSettingsScreen,
+  type SettingsScreen,
+} from "./settings-flow";
 import { airburstFlightTimings } from "./shot-timing";
 import {
   isShieldSelectorCloseKey,
@@ -207,7 +212,6 @@ interface GameModel {
   roundWinner: 0 | 1 | null;
   lastRoundWasDraw: boolean;
   shieldEvents: ShieldMatchEvent[];
-  paused: boolean;
   audio: AudioPreferences;
   audioAvailable: boolean;
   audioDiagnostic: string | null;
@@ -486,7 +490,6 @@ function createGame(seed = 41_705): GameModel {
     roundWinner: null,
     lastRoundWasDraw: false,
     shieldEvents: [],
-    paused: false,
     audio: { ...DEFAULT_AUDIO_PREFERENCES },
     audioAvailable: true,
     audioDiagnostic: null,
@@ -2338,7 +2341,6 @@ function cameraShakeOffset(
 ): Vector2 {
   if (
     !shot ||
-    model.paused ||
     model.reducedMotion ||
     model.effectLevel === "reduced"
   ) {
@@ -3860,8 +3862,11 @@ export default function ScorchedGame() {
     useState<WeaponSelectorFilterId>("all");
   const [weaponSelectorOpen, setWeaponSelectorOpen] = useState(false);
   const [shieldSelectorOpen, setShieldSelectorOpen] = useState(false);
+  const [settingsScreen, setSettingsScreen] =
+    useState<SettingsScreen>("start");
 
   const model = gameRef.current;
+  const settingsOpen = settingsScreen === "match";
   const infiniteArsenal = isInfiniteArsenalMode(model.mode);
   const activeTank = model.tanks[model.activePlayer];
   const selectedWeapon = chooseAvailableWeapon(model, model.activePlayer);
@@ -3894,7 +3899,7 @@ export default function ScorchedGame() {
         count: "Арсенал 33",
       };
   const activeShieldDefinition = getShield(activeTank.shieldId);
-  const controlsLocked = model.phase !== "aiming" || model.paused;
+  const controlsLocked = model.phase !== "aiming" || settingsOpen;
   const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
   const selectorExperimental =
     infiniteArsenal &&
@@ -4174,7 +4179,6 @@ export default function ScorchedGame() {
       audioRef.current = audio;
       audio.updateSettings(game.audio);
       audio.setMusicState(audioMusicState(game));
-      audio.setPaused(game.paused);
       const activation = await audio.activate(game.audio);
       if (audioRef.current !== audio) {
         void audio.dispose().catch(() => undefined);
@@ -4368,7 +4372,7 @@ export default function ScorchedGame() {
     const game = gameRef.current;
     if (
       game.phase !== "aiming" ||
-      game.paused ||
+      settingsOpen ||
       window.matchMedia("(orientation: portrait)").matches
     ) {
       return;
@@ -4380,14 +4384,14 @@ export default function ScorchedGame() {
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [playUiAudio]);
+  }, [playUiAudio, settingsOpen]);
 
   const openShieldSelector = useCallback(() => {
     const game = gameRef.current;
     if (
       !isInfiniteArsenalMode(game.mode) ||
       game.phase !== "aiming" ||
-      game.paused ||
+      settingsOpen ||
       window.matchMedia("(orientation: portrait)").matches
     ) {
       return;
@@ -4398,7 +4402,7 @@ export default function ScorchedGame() {
     }
     setShieldSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [playUiAudio]);
+  }, [playUiAudio, settingsOpen]);
 
   useEffect(() => {
     const portrait = window.matchMedia("(orientation: portrait)");
@@ -4544,16 +4548,14 @@ export default function ScorchedGame() {
       );
       lastFrameRef.current = now;
 
-      if (!game.paused) {
-        updateParticles(
-          particlesRef.current,
-          delta,
-          particlePoolRef.current,
-        );
-      }
+      updateParticles(
+        particlesRef.current,
+        delta,
+        particlePoolRef.current,
+      );
 
       const shot = shotRef.current;
-      if (shot && !game.paused) {
+      if (shot) {
         shot.elapsedMs += delta * 1_000;
       }
       const cameraProgress = shot
@@ -4634,7 +4636,7 @@ export default function ScorchedGame() {
         const progress = cameraProgress;
         drawShot(context, shot, progress, game, now);
 
-        if (!game.paused && !shot.resolved && progress >= shot.resolvedAt) {
+        if (!shot.resolved && progress >= shot.resolvedAt) {
           shot.resolved = true;
           const previousHealth = game.tanks.map((tank) => tank.health);
           const previousY = game.tanks.map((tank) => tank.y);
@@ -4715,7 +4717,7 @@ export default function ScorchedGame() {
           refresh();
         }
 
-        if (!game.paused && progress >= shot.endsAt) {
+        if (progress >= shot.endsAt) {
           finishShot();
         }
       }
@@ -4742,7 +4744,7 @@ export default function ScorchedGame() {
   const adjustAngle = useCallback(
     (next: number) => {
       const game = gameRef.current;
-      if (game.phase !== "aiming" || game.paused) {
+      if (game.phase !== "aiming") {
         return;
       }
       updatePlayerAim(game.tanks[game.activePlayer], {
@@ -4756,7 +4758,7 @@ export default function ScorchedGame() {
   const adjustPower = useCallback(
     (next: number) => {
       const game = gameRef.current;
-      if (game.phase !== "aiming" || game.paused) {
+      if (game.phase !== "aiming") {
         return;
       }
       const tank = game.tanks[game.activePlayer];
@@ -4775,7 +4777,7 @@ export default function ScorchedGame() {
   const selectWeapon = useCallback(
     (weaponId: WeaponId) => {
       const game = gameRef.current;
-      if (game.phase !== "aiming" || game.paused) {
+      if (game.phase !== "aiming") {
         return;
       }
       const tank = game.tanks[game.activePlayer];
@@ -4819,8 +4821,7 @@ export default function ScorchedGame() {
       const game = gameRef.current;
       if (
         !isInfiniteArsenalMode(game.mode) ||
-        game.phase !== "aiming" ||
-        game.paused
+        game.phase !== "aiming"
       ) {
         return;
       }
@@ -4901,8 +4902,7 @@ export default function ScorchedGame() {
       const game = gameRef.current;
       if (
         !isInfiniteArsenalMode(game.mode) ||
-        game.phase !== "aiming" ||
-        game.paused
+        game.phase !== "aiming"
       ) {
         return;
       }
@@ -4970,7 +4970,7 @@ export default function ScorchedGame() {
   const cycleWeapon = useCallback(
     (direction: -1 | 1) => {
       const game = gameRef.current;
-      if (game.phase !== "aiming" || game.paused) {
+      if (game.phase !== "aiming") {
         return;
       }
       const current = chooseAvailableWeapon(game, game.activePlayer);
@@ -5001,7 +5001,7 @@ export default function ScorchedGame() {
 
   const fire = useCallback(() => {
     const game = gameRef.current;
-    if (game.phase !== "aiming" || game.paused || shotRef.current) {
+    if (game.phase !== "aiming" || shotRef.current) {
       return;
     }
 
@@ -5053,7 +5053,7 @@ export default function ScorchedGame() {
       const game = gameRef.current;
       const action = getGameKeyboardAction(event.code, {
         phase: game.phase,
-        paused: game.paused,
+        settingsOpen,
         target: event.target,
       });
 
@@ -5061,11 +5061,25 @@ export default function ScorchedGame() {
         return;
       }
 
-      if (action.type === "toggle-pause") {
-        game.paused = !game.paused;
-        audioRef.current?.setPaused(game.paused);
-        playUiAudio(game.paused ? "pause" : "resume");
-        refresh();
+      if (action.type === "toggle-settings") {
+        const nextScreen = transitionSettingsScreen(
+          settingsScreen,
+          settingsOpen ? "close-settings" : "open-settings",
+          game.phase,
+        );
+        if (nextScreen !== settingsScreen) {
+          event.preventDefault();
+          if (!settingsOpen) {
+            resetTransientSelectorsForTurnChange();
+          }
+          setSettingsScreen(nextScreen);
+          playUiAudio(
+            settingsOpen ? "selector-close" : "selector-open",
+          );
+          if (settingsOpen) {
+            canvasRef.current?.focus({ preventScroll: true });
+          }
+        }
         return;
       }
 
@@ -5103,18 +5117,17 @@ export default function ScorchedGame() {
     cycleWeapon,
     fire,
     playUiAudio,
-    refresh,
+    resetTransientSelectorsForTurnChange,
+    settingsOpen,
+    settingsScreen,
   ]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.hidden) {
-        const game = gameRef.current;
-        if (game.phase === "aiming" || game.phase === "firing") {
-          game.paused = true;
-          audioRef.current?.setPaused(true);
-          refresh();
-        }
+        setSettingsScreen((screen) =>
+          settingsScreenAfterPageLifecycle(screen, "hidden"),
+        );
         void audioRef.current
           ?.setHidden(true)
           .catch((error: unknown) => {
@@ -5122,6 +5135,9 @@ export default function ScorchedGame() {
           });
         return;
       }
+      setSettingsScreen((screen) =>
+        settingsScreenAfterPageLifecycle(screen, "visible"),
+      );
       const game = gameRef.current;
       if (
         audioRef.current &&
@@ -5166,7 +5182,16 @@ export default function ScorchedGame() {
 
   const startMatch = useCallback(() => {
     const game = gameRef.current;
+    const nextScreen = transitionSettingsScreen(
+      settingsScreen,
+      "start-match",
+      game.phase,
+    );
+    if (nextScreen === settingsScreen) {
+      return;
+    }
     const audioActivation = ensureAudio();
+    setSettingsScreen(nextScreen);
     cameraModeRef.current = "auto";
     game.phase = "aiming";
     cameraRef.current = createCamera(
@@ -5190,7 +5215,12 @@ export default function ScorchedGame() {
         logAudioSmoke("start-smoke", audio);
       }
     });
-  }, [ensureAudio, logAudioSmoke, refresh]);
+  }, [
+    ensureAudio,
+    logAudioSmoke,
+    refresh,
+    settingsScreen,
+  ]);
 
   const openRoundResult = useCallback(() => {
     const game = gameRef.current;
@@ -5331,23 +5361,38 @@ export default function ScorchedGame() {
     refresh();
   }, [playUiAudio, refresh]);
 
-  const togglePause = useCallback(() => {
+  const openSettings = useCallback(() => {
     const game = gameRef.current;
-    if (
-      game.phase !== "aiming" &&
-      game.phase !== "firing" &&
-      !game.paused
-    ) {
+    const nextScreen = transitionSettingsScreen(
+      settingsScreen,
+      "open-settings",
+      game.phase,
+    );
+    if (nextScreen === settingsScreen) {
       return;
     }
-    game.paused = !game.paused;
-    audioRef.current?.setPaused(game.paused);
-    playUiAudio(game.paused ? "pause" : "resume");
-    if (!game.paused) {
-      void ensureAudio();
+    resetTransientSelectorsForTurnChange();
+    setSettingsScreen(nextScreen);
+    playUiAudio("selector-open");
+  }, [
+    playUiAudio,
+    resetTransientSelectorsForTurnChange,
+    settingsScreen,
+  ]);
+
+  const closeSettings = useCallback(() => {
+    const nextScreen = transitionSettingsScreen(
+      settingsScreen,
+      "close-settings",
+      gameRef.current.phase,
+    );
+    if (nextScreen === settingsScreen) {
+      return;
     }
-    refresh();
-  }, [ensureAudio, playUiAudio, refresh]);
+    setSettingsScreen(nextScreen);
+    playUiAudio("selector-close");
+    canvasRef.current?.focus({ preventScroll: true });
+  }, [playUiAudio, settingsScreen]);
 
   const resetGame = useCallback(() => {
     const previous = gameRef.current;
@@ -5373,6 +5418,9 @@ export default function ScorchedGame() {
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(false);
     setShieldSelectorOpen(false);
+    setSettingsScreen((screen) =>
+      transitionSettingsScreen(screen, "reset-match", "intro"),
+    );
     audioRef.current?.cancelAll();
     audioRef.current?.setPaused(false);
     audioRef.current?.setMusicState("intro");
@@ -5712,20 +5760,19 @@ export default function ScorchedGame() {
         {model.message}
       </div>
 
-      {(model.phase === "aiming" || model.phase === "firing") && (
+      {model.phase === "aiming" && !settingsOpen && (
         <button
           type="button"
           className={styles.iconButton}
-          onClick={togglePause}
-          aria-label="Пауза и настройки"
-          title="Пауза (P)"
+          onClick={openSettings}
+          aria-label="Открыть настройки"
+          title="Настройки (P)"
         >
-          {model.paused ? "▶" : "Ⅱ"}
+          ⚙
         </button>
       )}
 
       {(model.phase === "aiming" || model.phase === "firing") &&
-        !model.paused &&
         !model.audioAvailable && (
           <button
             type="button"
@@ -6233,20 +6280,21 @@ export default function ScorchedGame() {
         </div>
       </dialog>
 
-      {model.phase === "intro" && (
+      {settingsScreen === "start" && model.phase === "intro" && (
         <div className={styles.overlay}>
           <section className={styles.modal} aria-labelledby="intro-title">
             <div className={styles.modalMark} aria-hidden="true">
               ⌁
             </div>
-            <p className={styles.eyebrow}>Local hot-seat · 3 раунда</p>
+            <p className={styles.eyebrow}>
+              Настройки матча · Local hot-seat · 3 раунда
+            </p>
             <h2 id="intro-title" className={styles.modalTitle}>
-              Огонь оставляет след
+              Настройки матча
             </h2>
             <p className={styles.modalText}>
-              Два пилота по очереди на одном экране. Настройте угол и силу,
-              учтите ветер и выберите правила доступности арсенала перед
-              стартом.
+              Выберите режим, звук и интенсивность эффектов. Матч начнётся
+              только после явного запуска.
             </p>
             <div
               className={styles.modeGrid}
@@ -6281,6 +6329,32 @@ export default function ScorchedGame() {
               </button>
             </div>
             {audioSettings}
+            <div className={styles.toggleGrid}>
+              <button
+                type="button"
+                className={styles.toggleButton}
+                onClick={toggleMotion}
+              >
+                <span>Reduced motion</span>
+                <span className={styles.toggleState}>
+                  {model.reducedMotion ? "Вкл" : "Выкл"}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={styles.toggleButton}
+                onClick={cycleEffects}
+              >
+                <span>Эффекты</span>
+                <span className={styles.toggleState}>
+                  {model.effectLevel === "full"
+                    ? "Полные"
+                    : model.effectLevel === "balanced"
+                      ? "Баланс"
+                      : "Меньше"}
+                </span>
+              </button>
+            </div>
             <div className={styles.modalActions}>
               <button
                 type="button"
@@ -6305,13 +6379,19 @@ export default function ScorchedGame() {
         </div>
       )}
 
-      {model.paused && (
+      {settingsOpen && (
         <div className={styles.overlay}>
-          <section className={styles.modal} aria-labelledby="pause-title">
-            <p className={styles.eyebrow}>Симуляция остановлена</p>
-            <h2 id="pause-title" className={styles.modalTitle}>
-              Пауза
+          <section className={styles.modal} aria-labelledby="settings-title">
+            <p className={styles.eyebrow}>
+              Ход и выбранное оружие сохраняются
+            </p>
+            <h2 id="settings-title" className={styles.modalTitle}>
+              Настройки
             </h2>
+            <p className={styles.modalText}>
+              Изменения применяются к текущему матчу. Закрытие вернёт вас к
+              тому же ходу без сброса игровых данных.
+            </p>
             {audioSettings}
             <div className={styles.toggleGrid}>
               <button
@@ -6351,9 +6431,9 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={`${styles.modalButton} ${styles.modalButtonPrimary}`}
-                onClick={togglePause}
+                onClick={closeSettings}
               >
-                Продолжить
+                Вернуться в матч
               </button>
             </div>
           </section>

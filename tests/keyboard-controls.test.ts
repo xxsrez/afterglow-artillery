@@ -10,7 +10,7 @@ import {
 
 const aimingContext = {
   phase: "aiming",
-  paused: false,
+  settingsOpen: false,
   target: null,
 } as const;
 
@@ -81,7 +81,7 @@ describe("game keyboard controls", () => {
     },
   );
 
-  it("keeps weapon cycling, firing, and pause shortcuts available", () => {
+  it("keeps weapon cycling, firing, and settings shortcuts available", () => {
     expect(getGameKeyboardAction("KeyQ", aimingContext)).toEqual({
       type: "cycle-weapon",
       direction: -1,
@@ -97,15 +97,15 @@ describe("game keyboard controls", () => {
       type: "fire",
     });
     expect(getGameKeyboardAction("KeyP", aimingContext)).toEqual({
-      type: "toggle-pause",
+      type: "toggle-settings",
     });
   });
 
-  it("ignores aiming shortcuts while paused or outside the aiming phase", () => {
+  it("ignores aiming shortcuts while settings are open or outside aiming", () => {
     expect(
       getGameKeyboardAction("ArrowLeft", {
         ...aimingContext,
-        paused: true,
+        settingsOpen: true,
       }),
     ).toBeNull();
     expect(
@@ -119,7 +119,13 @@ describe("game keyboard controls", () => {
         ...aimingContext,
         phase: "firing",
       }),
-    ).toEqual({ type: "toggle-pause" });
+    ).toBeNull();
+    expect(
+      getGameKeyboardAction("KeyP", {
+        ...aimingContext,
+        settingsOpen: true,
+      }),
+    ).toEqual({ type: "toggle-settings" });
   });
 
   it.each(["input", "BUTTON", "Select", "textarea", "a"])(

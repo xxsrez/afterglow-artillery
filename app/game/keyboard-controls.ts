@@ -6,11 +6,11 @@ export type GameKeyboardAction =
   | { readonly type: "adjust-power"; readonly delta: -10 | 10 }
   | { readonly type: "cycle-weapon"; readonly direction: -1 | 1 }
   | { readonly type: "fire" }
-  | { readonly type: "toggle-pause" };
+  | { readonly type: "toggle-settings" };
 
 interface KeyboardControlContext {
   readonly phase: string;
-  readonly paused: boolean;
+  readonly settingsOpen: boolean;
   readonly target: EventTarget | null;
 }
 
@@ -108,14 +108,12 @@ export function getGameKeyboardAction(
   }
 
   if (code === "Escape" || code === "KeyP") {
-    return context.phase === "aiming" ||
-      context.phase === "firing" ||
-      context.paused
-      ? { type: "toggle-pause" }
+    return context.phase === "aiming" || context.settingsOpen
+      ? { type: "toggle-settings" }
       : null;
   }
 
-  if (context.phase !== "aiming" || context.paused) {
+  if (context.phase !== "aiming" || context.settingsOpen) {
     return null;
   }
 
