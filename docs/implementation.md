@@ -321,7 +321,10 @@ hold/cancel, Pause, resize/orientation, portrait gate и browser
 console/page errors; layout snapshots маскируют недетерминированную Canvas
 presentation. Высота `844×320` служит прокси для раскрытых панелей мобильного
 браузера, portrait `390×844` — для orientation gate. После автоматики основной
-поток дополнительно проверяется во встроенном браузере.
+поток дополнительно проверяется во встроенном браузере. Pixel snapshots
+проверяются локально на macOS, где созданы их baselines; Linux CI прогоняет
+переносимые geometry и interaction checks, но не заявляет cross-OS pixel
+parity без отдельных Linux baselines.
 
 ## Осознанные ограничения
 

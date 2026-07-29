@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/mobile",
+  testIgnore: process.env.CI ? "**/mobile-visual.spec.ts" : undefined,
   outputDir: "test-results/mobile",
   snapshotPathTemplate:
     "{testDir}/__snapshots__/{projectName}/{testFilePath}/{arg}{ext}",
