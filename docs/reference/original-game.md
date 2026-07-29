@@ -1,7 +1,7 @@
 # Scorched Earth 1.5: механическая база
 
 - **Статус:** справочно; не спецификация и не юридическое разрешение
-- **Проверено:** 2026-07-28
+- **Проверено:** 2026-07-29
 - **Версия источника:** Scorched Earth 1.5
 
 ## 1. Источники и границы уверенности
@@ -101,6 +101,11 @@ Hash фиксирует исследованный официальный арх
 | Tunneling | On | contact trigger вызывает взрыв при первом контакте |
 | Scale | Normal | Medium и Large усиливают масштаб |
 | Trace Paths | Off | tracer остаётся отдельной механикой |
+
+При `Changing Wind = On` manual описывает ветер как слегка меняющийся между
+каждым выстрелом. Точная формула, распределение, размер изменения и зависимость
+от предыдущего состояния не опубликованы; их нельзя выводить из default и
+диапазонов меню.
 
 Standard scoring даёт очки за повреждение танка или shield и меньше
 вознаграждает сам kill. Basic учитывает kill и выживание. Greedy ранжирует по
@@ -335,6 +340,7 @@ Manual описывает Funky Bomb как многоцветную chain react
 - силы deflection и guidance correction;
 - точный ballistic integration step, масштаб и физический смысл units
   gravity/wind;
+- алгоритм, распределение и state transition опции Changing Wind;
 - terrain generation и settle algorithm;
 - napalm heat/pool formula;
 - Funky Bomb chain count, placement, timing и damage;

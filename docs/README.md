@@ -25,13 +25,15 @@
    измерения `current → proposed`, три envelope и performance budgets.
 9. [Составные боеприпасы](decisions/0005-composite-payload-resolution.md) —
    per-warhead resolution MIRV, Death's Head и Leap Frog.
-10. [Оригинальная игра](reference/original-game.md) — полный source-backed
+10. [Меняющийся ветер Quick Demo](decisions/0006-quick-demo-changing-wind.md) —
+    provisional mean-reverting модель и статистическая калибровка.
+11. [Оригинальная игра](reference/original-game.md) — полный source-backed
    каталог из 33 weapons, экономика и неизвестные параметры Scorched Earth 1.5.
-11. [Происхождение аудио-ассетов](reference/audio-assets.md) — CC0-источники,
+12. [Происхождение аудио-ассетов](reference/audio-assets.md) — CC0-источники,
     исходные имена, преобразования и SHA-256 публичных music/SFX files.
-12. [Проверка shield showcase](verification/shield-showcase.md) —
+13. [Проверка shield showcase](verification/shield-showcase.md) —
    воспроизводимый seed, stimulus и обязательные реакции пяти семейств.
-13. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
+14. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
     representative small/medium/cluster/terrain/nuclear styleframes.
 
 ## Пути чтения

@@ -16,6 +16,7 @@ import {
   DEMO_BEHAVIORS,
   airburstImpactPlan,
   airburstPayloadProfile,
+  advanceWindAfterShot,
   availableSelectedWeapon,
   applyInterest,
   buildDiggerPath,
@@ -26,6 +27,7 @@ import {
   calculateInterest,
   consumePlayerWeapon,
   createDemoInventory,
+  createWindSnapshot,
   generateBattlefield,
   getDemoBehavior,
   getShield,
@@ -72,6 +74,7 @@ import {
   type Vector2,
   type WeaponEffectProfile,
   type WeaponId,
+  type WindSnapshot,
 } from "@/lib/game";
 import {
   useCallback,
@@ -144,6 +147,10 @@ import styles from "./ScorchedGame.module.css";
 const TOTAL_ROUNDS = 3;
 const MAX_TURNS_PER_ROUND = 12;
 const TANK_HALF_HEIGHT = 11;
+const QUICK_DEMO_WIND_RULES = {
+  maxWind: 90,
+  changingWind: true,
+} as const;
 
 const PLAYER_COLORS = ["#d8ff45", "#ff6658"] as const;
 const PLAYER_NAMES = ["Пилот Лайм", "Пилот Коралл"] as const;
@@ -191,6 +198,7 @@ interface GameModel {
   terrain: TerrainGrid;
   terrainRevision: number;
   terrainDirtyRegion: TerrainBounds | "full" | null;
+  windSnapshot: WindSnapshot;
   wind: number;
   turn: number;
   tanks: [PlayerTank, PlayerTank];
@@ -451,15 +459,10 @@ function makePlayer(
   };
 }
 
-function nextWind(seed: number, round: number): number {
-  const random = new SeededRandom(`${seed}:wind:${round}`);
-  const raw = random.integer(-90, 91);
-  return Math.abs(raw) < 12 ? (raw < 0 ? -12 : 12) : raw;
-}
-
 function createGame(seed = 41_705): GameModel {
   const battlefield = generateBattlefield(seed);
   const { terrain, spawns } = battlefield;
+  const windSnapshot = createWindSnapshot(seed, QUICK_DEMO_WIND_RULES);
 
   return {
     seed,
@@ -471,7 +474,8 @@ function createGame(seed = 41_705): GameModel {
     terrain,
     terrainRevision: 0,
     terrainDirtyRegion: "full",
-    wind: nextWind(seed, 1),
+    windSnapshot,
+    wind: windSnapshot.wind,
     turn: 0,
     tanks: [
       makePlayer(0, spawns[0]),
@@ -1984,7 +1988,6 @@ function prepareNextRound(model: GameModel): void {
   model.terrain = battlefield.terrain;
   model.terrainRevision += 1;
   queueFullTerrainRedraw(model);
-  model.wind = nextWind(model.seed, model.round);
   model.roundWinner = null;
   model.lastRoundWasDraw = false;
 
@@ -4499,6 +4502,12 @@ export default function ScorchedGame() {
     resetTransientSelectorsForTurnChange();
 
     const somebodyDestroyed = game.tanks.some((tank) => tank.health <= 0);
+    game.windSnapshot = advanceWindAfterShot(
+      game.windSnapshot,
+      game.seed,
+      QUICK_DEMO_WIND_RULES,
+    );
+    game.wind = game.windSnapshot.wind;
     game.turn += 1;
     if (somebodyDestroyed || game.turn >= MAX_TURNS_PER_ROUND) {
       completeRound(game);

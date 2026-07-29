@@ -15,3 +15,4 @@ export * from "./shields";
 export * from "./terrain";
 export * from "./types";
 export * from "./weapons";
+export * from "./wind";
