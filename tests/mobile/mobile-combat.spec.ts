@@ -51,10 +51,12 @@ test("precision trays are exclusive and gate Fire", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 320 });
   await prepareMatch(page, "infinite-arsenal");
 
-  await page.getByRole("button", { name: "Увеличить угол" }).click();
+  await page
+    .getByRole("button", { name: "Повернуть ствол вправо" })
+    .click();
   await expect(
     page.getByRole("button", {
-      name: "Угол 49 градусов. Открыть точную настройку",
+      name: "Угол 47 градусов. Открыть точную настройку",
     }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Увеличить силу" }).click();
@@ -65,11 +67,20 @@ test("precision trays are exclusive and gate Fire", async ({ page }) => {
   ).toBeVisible();
 
   const angle = page.getByRole("button", {
-    name: "Угол 49 градусов. Открыть точную настройку",
+    name: "Угол 47 градусов. Открыть точную настройку",
   });
   await angle.click();
-  await expect(page.getByTestId("angle-precision-tray")).toBeVisible();
+  const angleTray = page.getByTestId("angle-precision-tray");
+  await expect(angleTray).toBeVisible();
   await expect(page.getByTestId("fire-button")).toBeDisabled();
+  await angleTray
+    .getByRole("button", { name: "Повернуть ствол вправо" })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Угол 46 градусов. Открыть точную настройку",
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Готово" }).click();
 
   await page
@@ -119,13 +130,17 @@ test("visible-viewport fit keeps real taps on aim and Fire controls", async ({
     "320",
   );
 
-  await page.getByRole("button", { name: "Увеличить угол" }).tap();
+  await page
+    .getByRole("button", { name: "Повернуть ствол вправо" })
+    .tap();
   await expect(
     page.getByRole("button", {
-      name: "Угол 49 градусов. Открыть точную настройку",
+      name: "Угол 47 градусов. Открыть точную настройку",
     }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Уменьшить угол" }).tap();
+  await page
+    .getByRole("button", { name: "Повернуть ствол влево" })
+    .tap();
   await expect(
     page.getByRole("button", {
       name: "Угол 48 градусов. Открыть точную настройку",
@@ -135,6 +150,59 @@ test("visible-viewport fit keeps real taps on aim and Fire controls", async ({
   const geometry = await collectGeometry(page);
   expect(geometry.regions["game-container"]?.bottom).toBeLessThanOrEqual(320);
   expect(geometry.regions["fire-button"]?.bottom).toBeLessThanOrEqual(320);
+});
+
+test("held screen-direction aim accelerates and stops on release", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 844, height: 320 });
+  await prepareMatch(page, "quick-demo");
+
+  const right = page.getByRole("button", {
+    name: "Повернуть ствол вправо",
+  });
+  const angleValue = async () => {
+    const label = await page
+      .getByTestId("angle-stepper")
+      .getByRole("button", { name: /Открыть точную настройку/ })
+      .getAttribute("aria-label");
+    const match = label?.match(/Угол (\d+) градусов/);
+    if (!match) {
+      throw new Error(`Не удалось прочитать угол из "${label}"`);
+    }
+    return Number(match[1]);
+  };
+  const box = await right.boundingBox();
+  if (!box) {
+    throw new Error("Кнопка поворота вправо не имеет geometry");
+  }
+  const pointer = {
+    bubbles: true,
+    cancelable: true,
+    isPrimary: true,
+    pointerId: 84,
+    pointerType: "touch",
+    clientX: box.x + box.width / 2,
+    clientY: box.y + box.height / 2,
+  };
+
+  const start = await angleValue();
+  await right.dispatchEvent("pointerdown", pointer);
+  await page.waitForTimeout(450);
+  const afterFirstInterval = await angleValue();
+  await page.waitForTimeout(650);
+  const afterSecondInterval = await angleValue();
+  await right.dispatchEvent("pointerup", pointer);
+
+  const firstChange = start - afterFirstInterval;
+  const secondChange = afterFirstInterval - afterSecondInterval;
+  expect(firstChange).toBeGreaterThanOrEqual(1);
+  expect(secondChange).toBeGreaterThan(firstChange);
+
+  await page.waitForTimeout(100);
+  const settledAfterRelease = await angleValue();
+  await page.waitForTimeout(250);
+  await expect.poll(angleValue).toBe(settledAfterRelease);
 });
 
 test("Loadout tabs are fullscreen and block background", async ({ page }) => {
@@ -209,10 +277,12 @@ test("coarse Fire taps once and cancels after leaving the button", async ({
 test("resize and orientation round-trip preserve the match", async ({ page }) => {
   await page.setViewportSize({ width: 844, height: 390 });
   await prepareMatch(page, "quick-demo");
-  await page.getByRole("button", { name: "Увеличить угол" }).click();
+  await page
+    .getByRole("button", { name: "Повернуть ствол вправо" })
+    .click();
   await expect(
     page.getByRole("button", {
-      name: "Угол 49 градусов. Открыть точную настройку",
+      name: "Угол 47 градусов. Открыть точную настройку",
     }),
   ).toBeVisible();
 
@@ -229,7 +299,7 @@ test("resize and orientation round-trip preserve the match", async ({ page }) =>
   );
   await expect(
     page.getByRole("button", {
-      name: "Угол 49 градусов. Открыть точную настройку",
+      name: "Угол 47 градусов. Открыть точную настройку",
     }),
   ).toBeVisible();
 
@@ -242,7 +312,7 @@ test("resize and orientation round-trip preserve the match", async ({ page }) =>
   );
   await expect(
     page.getByRole("button", {
-      name: "Угол 49 градусов. Открыть точную настройку",
+      name: "Угол 47 градусов. Открыть точную настройку",
     }),
   ).toBeVisible();
 });

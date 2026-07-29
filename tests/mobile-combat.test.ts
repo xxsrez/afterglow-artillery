@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AIM_HOLD_DELAY_MS,
+  AIM_HOLD_INITIAL_STEPS_PER_SECOND,
+  AIM_HOLD_MAX_STEPS_PER_SECOND,
+  aimHoldStepsPerSecond,
   cameraCenterForOccludedTarget,
   clientPointToViewport,
   fitCombatViewport,
@@ -57,5 +61,19 @@ describe("mobile combat geometry", () => {
     const rect = { left: 10, top: 20, width: 84, height: 56 };
     expect(pointInsideRect(52, 48, rect)).toBe(true);
     expect(pointInsideRect(95, 48, rect)).toBe(false);
+  });
+
+  it("delays held aim repetition, then accelerates to a bounded rate", () => {
+    expect(aimHoldStepsPerSecond(AIM_HOLD_DELAY_MS - 1)).toBe(0);
+    expect(aimHoldStepsPerSecond(AIM_HOLD_DELAY_MS)).toBe(
+      AIM_HOLD_INITIAL_STEPS_PER_SECOND,
+    );
+    expect(aimHoldStepsPerSecond(AIM_HOLD_DELAY_MS + 700)).toBeGreaterThan(
+      AIM_HOLD_INITIAL_STEPS_PER_SECOND,
+    );
+    expect(aimHoldStepsPerSecond(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(aimHoldStepsPerSecond(10_000)).toBe(
+      AIM_HOLD_MAX_STEPS_PER_SECOND,
+    );
   });
 });

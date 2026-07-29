@@ -3,6 +3,10 @@ import type { CameraViewport } from "./camera";
 export const MOBILE_COMBAT_MAX_WIDTH = 960;
 export const MOBILE_COMBAT_MAX_HEIGHT = 520;
 export const MOBILE_COMBAT_MIN_HEIGHT = 286;
+export const AIM_HOLD_DELAY_MS = 280;
+export const AIM_HOLD_INITIAL_STEPS_PER_SECOND = 7;
+export const AIM_HOLD_MAX_STEPS_PER_SECOND = 30;
+export const AIM_HOLD_ACCELERATION_MS = 1_400;
 
 export interface CombatViewport extends CameraViewport {
   readonly dpr: number;
@@ -32,6 +36,24 @@ const finitePositive = (value: number, fallback: number): number =>
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
+
+export function aimHoldStepsPerSecond(elapsedMs: number): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < AIM_HOLD_DELAY_MS) {
+    return 0;
+  }
+
+  const accelerationProgress = clamp(
+    (elapsedMs - AIM_HOLD_DELAY_MS) / AIM_HOLD_ACCELERATION_MS,
+    0,
+    1,
+  );
+  return (
+    AIM_HOLD_INITIAL_STEPS_PER_SECOND +
+    (AIM_HOLD_MAX_STEPS_PER_SECOND -
+      AIM_HOLD_INITIAL_STEPS_PER_SECOND) *
+      accelerationProgress
+  );
+}
 
 export function isMobileCombatViewport(
   viewport: Pick<CombatViewport, "width" | "height">,

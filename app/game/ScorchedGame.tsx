@@ -151,6 +151,7 @@ import {
 } from "./weapon-selector";
 import {
   MOBILE_COMBAT_MIN_HEIGHT,
+  aimHoldStepsPerSecond,
   cameraCenterForOccludedTarget,
   clientPointToViewport,
   fitCombatViewport,
@@ -296,6 +297,19 @@ interface CameraGesture {
 
 interface FirePressState {
   pointerId: number | null;
+}
+
+type MobileAimControl = "angle" | "power";
+
+interface AimPressState {
+  pointerId: number | null;
+  control: MobileAimControl | null;
+  direction: -1 | 1;
+  target: HTMLButtonElement | null;
+  startedAt: number;
+  lastFrameAt: number;
+  stepRemainder: number;
+  frameId: number | null;
 }
 
 const REFERENCE_CAMERA_VIEWPORT = {
@@ -3858,8 +3872,19 @@ export default function ScorchedGame() {
   const fireHoldRef = useRef<FirePressState>({
     pointerId: null,
   });
+  const aimHoldRef = useRef<AimPressState>({
+    pointerId: null,
+    control: null,
+    direction: 1,
+    target: null,
+    startedAt: 0,
+    lastFrameAt: 0,
+    stepRemainder: 0,
+    frameId: null,
+  });
   const settingsOpenRef = useRef(false);
   const suppressFireClickRef = useRef(false);
+  const suppressAimClickRef = useRef(false);
   const fireReleaseGatePointerRef = useRef<number | null>(null);
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
@@ -3950,6 +3975,12 @@ export default function ScorchedGame() {
     shieldSelectorOpen ||
     cameraPanelOpen;
   const controlsLocked = model.phase !== "aiming" || settingsOpen;
+  const mobileAimInputLocked =
+    controlsLocked ||
+    stageTooShort ||
+    weaponSelectorOpen ||
+    shieldSelectorOpen ||
+    cameraPanelOpen;
   const mobileFireLocked =
     controlsLocked || transientLayerOpen || stageTooShort;
   const selectorWeapons = weaponsForSelectorFilter(weaponSelectorFilter);
@@ -4466,22 +4497,60 @@ export default function ScorchedGame() {
     }
   }, []);
 
+  const cancelMobileAimHold = useCallback(() => {
+    const hold = aimHoldRef.current;
+    aimHoldRef.current = {
+      pointerId: null,
+      control: null,
+      direction: 1,
+      target: null,
+      startedAt: 0,
+      lastFrameAt: 0,
+      stepRemainder: 0,
+      frameId: null,
+    };
+    if (hold.frameId !== null) {
+      cancelAnimationFrame(hold.frameId);
+    }
+    if (
+      hold.pointerId !== null &&
+      hold.target?.hasPointerCapture(hold.pointerId)
+    ) {
+      hold.target.releasePointerCapture(hold.pointerId);
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      cancelMobileAimHold();
+    },
+    [cancelMobileAimHold],
+  );
+
+  useEffect(() => {
+    if (mobileAimInputLocked) {
+      cancelMobileAimHold();
+    }
+  }, [cancelMobileAimHold, mobileAimInputLocked]);
+
   const openPrecisionTray = useCallback(
     (control: "angle" | "power") => {
       cancelMobileFireHold();
+      cancelMobileAimHold();
       setCameraPanelOpen(false);
       setPrecisionControl((current) =>
         current === control ? null : control,
       );
     },
-    [cancelMobileFireHold],
+    [cancelMobileAimHold, cancelMobileFireHold],
   );
 
   const toggleCameraPanel = useCallback(() => {
     cancelMobileFireHold();
+    cancelMobileAimHold();
     setPrecisionControl(null);
     setCameraPanelOpen((open) => !open);
-  }, [cancelMobileFireHold]);
+  }, [cancelMobileAimHold, cancelMobileFireHold]);
 
   const moveCameraFromMinimap = useCallback(
     (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
@@ -4564,6 +4633,7 @@ export default function ScorchedGame() {
   const closeWeaponSelector = useCallback(
     (outcome: SelectorCloseOutcome = "cancelled") => {
       cancelMobileFireHold();
+      cancelMobileAimHold();
       setWeaponSelectorOpen(false);
       suppressFireClickRef.current = true;
       window.setTimeout(() => {
@@ -4579,6 +4649,7 @@ export default function ScorchedGame() {
       playUiAudio("selector-close");
     },
     [
+      cancelMobileAimHold,
       cancelMobileFireHold,
       focusAfterWeaponSelectorClose,
       playUiAudio,
@@ -4597,6 +4668,7 @@ export default function ScorchedGame() {
   const closeShieldSelector = useCallback(
     (outcome: SelectorCloseOutcome = "cancelled") => {
       cancelMobileFireHold();
+      cancelMobileAimHold();
       setShieldSelectorOpen(false);
       suppressFireClickRef.current = true;
       window.setTimeout(() => {
@@ -4612,6 +4684,7 @@ export default function ScorchedGame() {
       playUiAudio("selector-close");
     },
     [
+      cancelMobileAimHold,
       cancelMobileFireHold,
       focusAfterShieldSelectorClose,
       playUiAudio,
@@ -4620,6 +4693,8 @@ export default function ScorchedGame() {
 
   const resetTransientSelectorsForTurnChange = useCallback(() => {
     cancelMobileFireHold();
+    cancelMobileAimHold();
+    suppressAimClickRef.current = false;
     suppressFireClickRef.current = false;
     fireReleaseGatePointerRef.current = null;
     setWeaponSelectorOpen(false);
@@ -4633,7 +4708,7 @@ export default function ScorchedGame() {
     if (shieldDialogRef.current?.open) {
       shieldDialogRef.current.close();
     }
-  }, [cancelMobileFireHold]);
+  }, [cancelMobileAimHold, cancelMobileFireHold]);
 
   const openWeaponSelector = useCallback(() => {
     const game = gameRef.current;
@@ -4648,13 +4723,19 @@ export default function ScorchedGame() {
     setPrecisionControl(null);
     setCameraPanelOpen(false);
     cancelMobileFireHold();
+    cancelMobileAimHold();
     if (shieldDialogRef.current?.open) {
       shieldDialogRef.current.close();
     }
     setWeaponSelectorFilter("all");
     setWeaponSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [cancelMobileFireHold, playUiAudio, settingsOpen]);
+  }, [
+    cancelMobileAimHold,
+    cancelMobileFireHold,
+    playUiAudio,
+    settingsOpen,
+  ]);
 
   const openShieldSelector = useCallback(() => {
     const game = gameRef.current;
@@ -4670,18 +4751,25 @@ export default function ScorchedGame() {
     setPrecisionControl(null);
     setCameraPanelOpen(false);
     cancelMobileFireHold();
+    cancelMobileAimHold();
     if (weaponDialogRef.current?.open) {
       weaponDialogRef.current.close();
     }
     setShieldSelectorOpen(true);
     playUiAudio("selector-open");
-  }, [cancelMobileFireHold, playUiAudio, settingsOpen]);
+  }, [
+    cancelMobileAimHold,
+    cancelMobileFireHold,
+    playUiAudio,
+    settingsOpen,
+  ]);
 
   useEffect(() => {
     const portrait = window.matchMedia("(orientation: portrait)");
     const closeInPortrait = () => {
       if (portrait.matches) {
         cancelMobileFireHold();
+        cancelMobileAimHold();
         pointerGestureRef.current.pointers.clear();
         pointerGestureRef.current.pinchDistance = null;
         pointerGestureRef.current.pinchMidpoint = null;
@@ -4700,6 +4788,7 @@ export default function ScorchedGame() {
     closeInPortrait();
     return () => portrait.removeEventListener("change", closeInPortrait);
   }, [
+    cancelMobileAimHold,
     cancelMobileFireHold,
     closeShieldSelector,
     closeWeaponSelector,
@@ -5073,6 +5162,157 @@ export default function ScorchedGame() {
     [refresh],
   );
 
+  const adjustAngleForScreenDirection = useCallback(
+    (screenDirection: -1 | 1) => {
+      const game = gameRef.current;
+      if (game.phase !== "aiming") {
+        return;
+      }
+      const tank = game.tanks[game.activePlayer];
+      adjustAngle(
+        tank.angleDegrees +
+          angleDeltaForScreenDirection(
+            screenDirection,
+            tank.direction,
+          ),
+      );
+    },
+    [adjustAngle],
+  );
+
+  const applyMobileAimStep = useCallback(
+    (control: MobileAimControl, direction: -1 | 1) => {
+      if (control === "angle") {
+        adjustAngleForScreenDirection(direction);
+        return;
+      }
+      const game = gameRef.current;
+      const tank = game.tanks[game.activePlayer];
+      adjustPower(tank.power + direction * 10);
+    },
+    [adjustAngleForScreenDirection, adjustPower],
+  );
+
+  const handleMobileAimPointerDown = useCallback(
+    (
+      event: ReactPointerEvent<HTMLButtonElement>,
+      control: MobileAimControl,
+      direction: -1 | 1,
+    ) => {
+      if (
+        mobileAimInputLocked ||
+        aimHoldRef.current.pointerId !== null ||
+        (event.pointerType === "mouse" && event.button !== 0)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      cancelMobileAimHold();
+      const target = event.currentTarget;
+      const pointerId = event.pointerId;
+      try {
+        target.setPointerCapture(pointerId);
+      } catch {
+        // Synthetic tests and interrupted WebKit gestures may not provide
+        // a native pointer that can be captured.
+      }
+
+      const startedAt = performance.now();
+      aimHoldRef.current = {
+        pointerId,
+        control,
+        direction,
+        target,
+        startedAt,
+        lastFrameAt: startedAt,
+        stepRemainder: 0,
+        frameId: null,
+      };
+      applyMobileAimStep(control, direction);
+
+      const repeat = (timestamp: number) => {
+        const hold = aimHoldRef.current;
+        if (
+          hold.pointerId !== pointerId ||
+          hold.control === null
+        ) {
+          return;
+        }
+
+        const frameDelta = Math.min(
+          50,
+          Math.max(0, timestamp - hold.lastFrameAt),
+        );
+        hold.lastFrameAt = timestamp;
+        hold.stepRemainder +=
+          (frameDelta / 1_000) *
+          aimHoldStepsPerSecond(timestamp - hold.startedAt);
+        const steps = Math.floor(hold.stepRemainder);
+        hold.stepRemainder -= steps;
+        for (let index = 0; index < steps; index += 1) {
+          applyMobileAimStep(hold.control, hold.direction);
+        }
+        hold.frameId = requestAnimationFrame(repeat);
+      };
+
+      aimHoldRef.current.frameId = requestAnimationFrame(repeat);
+    },
+    [
+      applyMobileAimStep,
+      cancelMobileAimHold,
+      mobileAimInputLocked,
+    ],
+  );
+
+  const handleMobileAimPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (
+        aimHoldRef.current.pointerId !== event.pointerId ||
+        pointInsideRect(
+          event.clientX,
+          event.clientY,
+          event.currentTarget.getBoundingClientRect(),
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      suppressAimClickRef.current = true;
+      window.setTimeout(() => {
+        suppressAimClickRef.current = false;
+      }, 0);
+      cancelMobileAimHold();
+    },
+    [cancelMobileAimHold],
+  );
+
+  const releaseMobileAimPointer = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (aimHoldRef.current.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      suppressAimClickRef.current = true;
+      window.setTimeout(() => {
+        suppressAimClickRef.current = false;
+      }, 0);
+      cancelMobileAimHold();
+    },
+    [cancelMobileAimHold],
+  );
+
+  const handleMobileAimClick = useCallback(
+    (control: MobileAimControl, direction: -1 | 1) => {
+      if (suppressAimClickRef.current) {
+        suppressAimClickRef.current = false;
+        return;
+      }
+      applyMobileAimStep(control, direction);
+    },
+    [applyMobileAimStep],
+  );
+
   const selectWeapon = useCallback(
     (weaponId: WeaponId) => {
       const game = gameRef.current;
@@ -5305,6 +5545,7 @@ export default function ScorchedGame() {
     }
 
     cancelMobileFireHold();
+    cancelMobileAimHold();
     setPrecisionControl(null);
     setCameraPanelOpen(false);
     const owner = game.activePlayer;
@@ -5348,7 +5589,12 @@ export default function ScorchedGame() {
       pan: audioPanForX(shot.finalPoint.x, game.terrain.width),
       seed: shot.seed,
     });
-  }, [cancelMobileFireHold, playAudioEvent, refresh]);
+  }, [
+    cancelMobileAimHold,
+    cancelMobileFireHold,
+    playAudioEvent,
+    refresh,
+  ]);
 
   const handleMobileFirePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -5489,13 +5735,7 @@ export default function ScorchedGame() {
       switch (action.type) {
         case "adjust-angle":
           event.preventDefault();
-          adjustAngle(
-            tank.angleDegrees +
-              angleDeltaForScreenDirection(
-                action.screenDirection,
-                tank.direction,
-              ),
-          );
+          adjustAngleForScreenDirection(action.screenDirection);
           break;
         case "adjust-power":
           event.preventDefault();
@@ -5514,7 +5754,7 @@ export default function ScorchedGame() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    adjustAngle,
+    adjustAngleForScreenDirection,
     adjustPower,
     cycleWeapon,
     fire,
@@ -5528,6 +5768,7 @@ export default function ScorchedGame() {
     const onVisibilityChange = () => {
       if (document.hidden) {
         cancelMobileFireHold();
+        cancelMobileAimHold();
         fireReleaseGatePointerRef.current = null;
         suppressFireClickRef.current = false;
         setPrecisionControl(null);
@@ -5560,7 +5801,7 @@ export default function ScorchedGame() {
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [cancelMobileFireHold, refresh]);
+  }, [cancelMobileAimHold, cancelMobileFireHold, refresh]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -6399,18 +6640,27 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.precisionStep}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(
+                    event,
+                    precisionControl,
+                    -1,
+                  )
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
                 onClick={() =>
-                  precisionControl === "angle"
-                    ? adjustAngle(activeTank.angleDegrees - 1)
-                    : adjustPower(activeTank.power - 10)
+                  handleMobileAimClick(precisionControl, -1)
                 }
                 aria-label={
                   precisionControl === "angle"
-                    ? "Уменьшить угол"
+                    ? "Повернуть ствол влево"
                     : "Уменьшить силу"
                 }
               >
-                −
+                {precisionControl === "angle" ? "←" : "−"}
               </button>
               <strong className={styles.precisionValue}>
                 {precisionControl === "angle"
@@ -6442,24 +6692,34 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.precisionStep}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(
+                    event,
+                    precisionControl,
+                    1,
+                  )
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
                 onClick={() =>
-                  precisionControl === "angle"
-                    ? adjustAngle(activeTank.angleDegrees + 1)
-                    : adjustPower(activeTank.power + 10)
+                  handleMobileAimClick(precisionControl, 1)
                 }
                 aria-label={
                   precisionControl === "angle"
-                    ? "Увеличить угол"
+                    ? "Повернуть ствол вправо"
                     : "Увеличить силу"
                 }
               >
-                +
+                {precisionControl === "angle" ? "→" : "+"}
               </button>
               <button
                 type="button"
                 className={styles.precisionDone}
                 onClick={() => {
                   cancelMobileFireHold();
+                  cancelMobileAimHold();
                   setPrecisionControl(null);
                 }}
               >
@@ -6485,11 +6745,18 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.mobileStepButton}
-                onClick={() => adjustAngle(activeTank.angleDegrees - 1)}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(event, "angle", -1)
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
+                onClick={() => handleMobileAimClick("angle", -1)}
                 disabled={controlsLocked || transientLayerOpen}
-                aria-label="Уменьшить угол"
+                aria-label="Повернуть ствол влево"
               >
-                −
+                ←
               </button>
               <button
                 type="button"
@@ -6505,11 +6772,18 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.mobileStepButton}
-                onClick={() => adjustAngle(activeTank.angleDegrees + 1)}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(event, "angle", 1)
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
+                onClick={() => handleMobileAimClick("angle", 1)}
                 disabled={controlsLocked || transientLayerOpen}
-                aria-label="Увеличить угол"
+                aria-label="Повернуть ствол вправо"
               >
-                +
+                →
               </button>
             </div>
 
@@ -6522,7 +6796,14 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.mobileStepButton}
-                onClick={() => adjustPower(activeTank.power - 10)}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(event, "power", -1)
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
+                onClick={() => handleMobileAimClick("power", -1)}
                 disabled={controlsLocked || transientLayerOpen}
                 aria-label="Уменьшить силу"
               >
@@ -6542,7 +6823,14 @@ export default function ScorchedGame() {
               <button
                 type="button"
                 className={styles.mobileStepButton}
-                onClick={() => adjustPower(activeTank.power + 10)}
+                onPointerDown={(event) =>
+                  handleMobileAimPointerDown(event, "power", 1)
+                }
+                onPointerMove={handleMobileAimPointerMove}
+                onPointerUp={releaseMobileAimPointer}
+                onPointerCancel={releaseMobileAimPointer}
+                onLostPointerCapture={releaseMobileAimPointer}
+                onClick={() => handleMobileAimClick("power", 1)}
                 disabled={controlsLocked || transientLayerOpen}
                 aria-label="Увеличить силу"
               >

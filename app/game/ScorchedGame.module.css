@@ -2501,6 +2501,7 @@
 
 .mobileStepButton {
   font-size: 21px;
+  touch-action: none;
 }
 
 .mobileAimValue {
@@ -2658,6 +2659,7 @@
   height: 48px;
   border-radius: 11px;
   font-size: 20px;
+  touch-action: none;
 }
 
 .precisionValue {
