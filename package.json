@@ -10,6 +10,7 @@
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "benchmark:battlefield": "tsx scripts/benchmark-battlefield.ts",
     "gallery:battlefield": "tsx scripts/generate-battlefield-gallery.ts",
+    "gallery:vfx-lab-ii": "tsx scripts/capture-vfx-lab-ii-gallery.ts",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "vitest run",
     "test:mobile": "playwright test --config=playwright.mobile.config.ts",

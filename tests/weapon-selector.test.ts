@@ -24,7 +24,11 @@ describe("weapon selector", () => {
 
   it("groups every weapon into exactly one visible mechanical category", () => {
     const groupedIds = WEAPON_SELECTOR_FILTERS.filter(
-      ({ id }) => id !== "all" && id !== "heavy" && id !== "experimental",
+      ({ id }) =>
+        id !== "all" &&
+        id !== "heavy" &&
+        id !== "experimental" &&
+        id !== "vfx-lab-ii",
     ).flatMap(({ id }) =>
       weaponsForSelectorFilter(id).map(({ id: weaponId }) => weaponId),
     );
@@ -32,6 +36,7 @@ describe("weapon selector", () => {
     expect(groupedIds).toHaveLength(WEAPONS.length);
     expect(new Set(groupedIds)).toEqual(new Set(WEAPON_IDS));
     expect(weaponsForSelectorFilter("experimental")).toEqual([]);
+    expect(weaponsForSelectorFilter("vfx-lab-ii")).toEqual([]);
   });
 
   it("spotlights the six nuclear and composite heavy weapons", () => {

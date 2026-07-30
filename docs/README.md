@@ -35,6 +35,10 @@
    воспроизводимый seed, stimulus и обязательные реакции пяти семейств.
 14. [Проверка effect envelopes](verification/effect-envelope-showcase.md) —
     representative small/medium/cluster/terrain/nuclear styleframes.
+15. [Слоистая presentation-архитектура VFX Lab II](decisions/0008-vfx-lab-ii-layered-presentation.md) —
+    разделение локальной механики, пяти draw stages и bounded quality budgets.
+16. [Проверка VFX Lab II](verification/vfx-lab-ii.md) — contact sheet,
+    Chromium telemetry, seeded invariants и явно открытые device gaps.
 
 ## Пути чтения
 

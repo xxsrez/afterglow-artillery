@@ -16,7 +16,8 @@ export type WeaponSelectorFilterId =
   | "terrain-creation"
   | "utility"
   | "energy"
-  | "experimental";
+  | "experimental"
+  | "vfx-lab-ii";
 
 interface WeaponSelectorFilter {
   readonly id: WeaponSelectorFilterId;
@@ -50,7 +51,8 @@ export const WEAPON_SELECTOR_FILTERS: readonly WeaponSelectorFilter[] = [
   },
   { id: "utility", label: "Пристрелка", categories: ["utility"] },
   { id: "energy", label: "Энергия", categories: ["energy"] },
-  { id: "experimental", label: "Experimental 10", categories: [] },
+  { id: "experimental", label: "Ultimates 10", categories: [] },
+  { id: "vfx-lab-ii", label: "VFX Lab II", categories: [] },
 ] as const;
 
 const CATEGORY_LABELS: Record<WeaponCategory, string> = {

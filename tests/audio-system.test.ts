@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   EXPERIMENTAL_ULTIMATES,
   SHIELDS,
+  VFX_LAB_II_IDS,
   WEAPONS,
   type ShieldEvent,
 } from "../lib/game";
@@ -79,15 +80,15 @@ const resolution = (
 });
 
 describe("typed weapon sound profiles", () => {
-  it("covers exactly 33 canonical weapons and 10 Experimental Ultimates", () => {
+  it("covers exactly 33 canonical weapons and 20 Showcase experiments", () => {
     expect(Object.keys(CANONICAL_SOUND_PROFILES)).toHaveLength(33);
-    expect(Object.keys(EXPERIMENTAL_SOUND_PROFILES)).toHaveLength(10);
-    expect(Object.keys(SOUND_PROFILES)).toHaveLength(43);
+    expect(Object.keys(EXPERIMENTAL_SOUND_PROFILES)).toHaveLength(20);
+    expect(Object.keys(SOUND_PROFILES)).toHaveLength(53);
     expect(Object.keys(CANONICAL_SOUND_PROFILES).sort()).toEqual(
       WEAPONS.map(({ id }) => id).sort(),
     );
     expect(Object.keys(EXPERIMENTAL_SOUND_PROFILES).sort()).toEqual(
-      EXPERIMENTAL_ULTIMATES.map(({ id }) => id).sort(),
+      [...EXPERIMENTAL_ULTIMATES.map(({ id }) => id), ...VFX_LAB_II_IDS].sort(),
     );
   });
 
@@ -106,7 +107,7 @@ describe("typed weapon sound profiles", () => {
       }),
     );
 
-    expect(new Set(fingerprints).size).toBe(43);
+    expect(new Set(fingerprints).size).toBe(53);
     for (const profile of profiles) {
       expect(profile.phases).toContain("launch");
       expect(profile.phases).toContain("impact");

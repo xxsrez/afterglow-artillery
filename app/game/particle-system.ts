@@ -2,13 +2,13 @@ import {
   EXPERIMENTAL_PARTICLE_CAPS,
   SeededRandom,
   getDemoBehavior,
-  getExperimentalUltimate,
+  getExperimentalShowcase,
   getWeapon,
   getWeaponEffectProfile,
-  isExperimentalUltimateId,
+  isExperimentalShowcaseId,
   pointAlongPathInto,
-  type ExperimentalResolutionResult,
-  type ExperimentalUltimateId,
+  type ExperimentalShowcaseId,
+  type ExperimentalShowcaseResolution,
   type Vector2,
   type WeaponId,
 } from "../../lib/game";
@@ -36,7 +36,7 @@ export interface Particle {
 }
 
 export interface ParticleShot {
-  readonly weaponId: WeaponId | ExperimentalUltimateId;
+  readonly weaponId: WeaponId | ExperimentalShowcaseId;
   readonly seed: number;
   readonly fizzled: boolean;
   readonly segments: readonly {
@@ -44,7 +44,7 @@ export interface ParticleShot {
   }[];
   readonly impactPoints: readonly Vector2[];
   readonly finalPoint: Vector2;
-  readonly experimentalResult?: ExperimentalResolutionResult;
+  readonly experimentalResult?: ExperimentalShowcaseResolution;
 }
 
 /** Quick Demo budget from ADR 0004. */
@@ -151,8 +151,8 @@ export function spawnImpactParticles(
   phone: boolean,
 ): void {
   const random = new SeededRandom(`${shot.seed}:presentation`);
-  if (isExperimentalUltimateId(shot.weaponId)) {
-    const definition = getExperimentalUltimate(shot.weaponId);
+  if (isExperimentalShowcaseId(shot.weaponId)) {
+    const definition = getExperimentalShowcase(shot.weaponId);
     const hardCap =
       effectLevel === "reduced"
         ? EXPERIMENTAL_PARTICLE_CAPS.reduced

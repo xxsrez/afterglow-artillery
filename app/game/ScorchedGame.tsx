@@ -4,6 +4,7 @@ import {
   CLASSIC_INTEREST_RATE,
   BATTLEFIELD_LAYOUT_MOTIFS,
   EXPERIMENTAL_ULTIMATES,
+  VFX_LAB_II_WEAPONS,
   MAX_INVENTORY,
   Material,
   SeededRandom,
@@ -36,10 +37,13 @@ import {
   generateBattlefield,
   getDemoBehavior,
   getShield,
+  getExperimentalShowcase,
   getExperimentalUltimate,
   getWeapon,
   getWeaponEffectProfile,
+  isExperimentalShowcaseId,
   isExperimentalUltimateId,
+  isVfxLabWeaponId,
   isInfiniteArsenalMode,
   isPlayerWeaponAvailable,
   leapFrogImpactPlan,
@@ -53,6 +57,7 @@ import {
   restoreAvailableSelectedWeapon,
   resolveRadialDamage,
   resolveExperimentalUltimate,
+  resolveVfxLabWeapon,
   resolveShieldDamage,
   resolveShieldDeflection,
   selectPlayerWeapon,
@@ -67,8 +72,8 @@ import {
   type DemoBehaviorKind,
   type DemoMatchMode,
   type BattlefieldSpawn,
-  type ExperimentalResolutionResult,
-  type ExperimentalUltimateId,
+  type ExperimentalShowcaseId,
+  type ExperimentalShowcaseResolution,
   type ShieldDamageKind,
   type ShieldEvent,
   type ShieldId,
@@ -163,6 +168,12 @@ import {
   pointInsideRect,
   type CombatViewport,
 } from "./mobile-combat";
+import {
+  createVfxLabRenderResources,
+  drawVfxLabMinimapCue,
+  drawVfxLabStage,
+  releaseVfxLabRenderResources,
+} from "./vfx-lab-ii-presentation";
 import styles from "./ScorchedGame.module.css";
 
 const TOTAL_ROUNDS = 3;
@@ -187,10 +198,10 @@ type GamePhase =
   | "shop"
   | "matchEnd";
 
-type PlayableWeaponId = WeaponId | ExperimentalUltimateId;
+type PlayableWeaponId = WeaponId | ExperimentalShowcaseId;
 
 interface PlayerTank extends Tank {
-  selectedExperimental: ExperimentalUltimateId | null;
+  selectedExperimental: ExperimentalShowcaseId | null;
   color: string;
   shieldId: ShieldId;
   shield: number;
@@ -292,7 +303,7 @@ interface ShotVisual {
   fizzled: boolean;
   seed: number;
   mechanicalPaths: ShotMechanicalPaths;
-  experimentalResult?: ExperimentalResolutionResult;
+  experimentalResult?: ExperimentalShowcaseResolution;
 }
 
 interface TerrainCache {
@@ -1087,10 +1098,10 @@ function buildShot(
 function buildExperimentalShot(
   model: GameModel,
   owner: 0 | 1,
-  ultimateId: ExperimentalUltimateId,
+  ultimateId: ExperimentalShowcaseId,
 ): ShotVisual {
   const tank = model.tanks[owner];
-  const definition = getExperimentalUltimate(ultimateId);
+  const definition = getExperimentalShowcase(ultimateId);
   const shotSeed =
     model.seed + model.round * 1_003 + model.turn * 37 + definition.testSeed;
   const origin = projectileOrigin(tank);
@@ -1098,25 +1109,38 @@ function buildExperimentalShot(
   const basePath = samplePath(trajectory);
   const impact =
     basePath[basePath.length - 1] ?? projectileOrigin(tank);
-  const result = resolveExperimentalUltimate({
-    ultimateId,
-    seed: shotSeed,
-    origin,
-    impact,
-    direction: tank.direction,
-    terrain: model.terrain,
-    tanks: model.tanks.map((candidate) => ({
-      id: candidate.id,
-      x: candidate.x,
-      y: candidate.y,
-      health: candidate.health,
-      maxHealth: candidate.maxHealth,
-    })),
-  });
-  const duration = Math.min(
-    5_000,
-    Math.max(2_400, definition.resolutionMs + 320),
-  );
+  const tanks = model.tanks.map((candidate) => ({
+    id: candidate.id,
+    x: candidate.x,
+    y: candidate.y,
+    health: candidate.health,
+    maxHealth: candidate.maxHealth,
+  }));
+  const result = isVfxLabWeaponId(ultimateId)
+    ? resolveVfxLabWeapon({
+        weaponId: ultimateId,
+        seed: shotSeed,
+        origin,
+        impact,
+        direction: tank.direction,
+        terrain: model.terrain,
+        tanks,
+      })
+    : resolveExperimentalUltimate({
+        ultimateId,
+        seed: shotSeed,
+        origin,
+        impact,
+        direction: tank.direction,
+        terrain: model.terrain,
+        tanks,
+      });
+  const duration = isVfxLabWeaponId(ultimateId)
+    ? result.durationMs
+    : Math.min(
+        5_000,
+        Math.max(2_400, definition.resolutionMs + 320),
+      );
   const deploymentAt = clamp(
     definition.anticipationMs / duration,
     0.16,
@@ -1140,6 +1164,9 @@ function buildExperimentalShot(
           clamp(event.atMs / duration, deploymentAt, 0.97),
         )
       : [deploymentAt];
+  const resolvedImpact = isVfxLabWeaponId(ultimateId)
+    ? (result.mechanicPoints[0] ?? impact)
+    : impact;
 
   return {
     weaponId: ultimateId,
@@ -1161,7 +1188,7 @@ function buildExperimentalShot(
     ],
     impactPoints,
     impactTimes,
-    finalPoint: impact,
+    finalPoint: resolvedImpact,
     flowPoints: [],
     origin,
     fizzled: false,
@@ -1540,7 +1567,7 @@ function resolveWeapon(model: GameModel, shot: ShotVisual): void {
     return;
   }
 
-  if (isExperimentalUltimateId(shot.weaponId)) {
+  if (isExperimentalShowcaseId(shot.weaponId)) {
     return;
   }
 
@@ -1976,8 +2003,8 @@ function withShieldEvents(model: GameModel, message: string): string {
 }
 
 function shotOutcomeText(model: GameModel, shot: ShotVisual): string {
-  if (isExperimentalUltimateId(shot.weaponId)) {
-    const ultimate = getExperimentalUltimate(shot.weaponId);
+  if (isExperimentalShowcaseId(shot.weaponId)) {
+    const ultimate = getExperimentalShowcase(shot.weaponId);
     const player = model.tanks[shot.owner];
     const opponent = model.tanks[nextPlayerIndex(shot.owner)];
     if (opponent.health <= 0 && player.health <= 0) {
@@ -2128,7 +2155,7 @@ function prepareNextRound(model: GameModel): void {
 
   model.phase = "aiming";
   model.message = isInfiniteArsenalMode(model.mode)
-    ? `Раунд ${model.round}. Infinite Arsenal: магазин пропущен, canonical 33 и Experimental 10 доступны. Ветер ${Math.abs(model.wind)}.`
+    ? `Раунд ${model.round}. Infinite Arsenal: магазин пропущен, canonical 33 и две Showcase-группы по 10 доступны. Ветер ${Math.abs(model.wind)}.`
     : `Раунд ${model.round}. Проценты 5%: +₡${formatCredits(interestEarned[0])} / ` +
       `+₡${formatCredits(interestEarned[1])}. Ветер ${Math.abs(model.wind)}.`;
 }
@@ -2401,6 +2428,7 @@ function drawMinimap(
   model: GameModel,
   camera: CameraState,
   viewport: CameraViewport,
+  shot: ShotVisual | null,
 ): void {
   const width = MINIMAP_CACHE_WIDTH;
   const height = MINIMAP_CACHE_HEIGHT;
@@ -2440,6 +2468,8 @@ function drawMinimap(
     context.fill();
   }
 
+  drawVfxLabMinimapCue(context, shot, scaleX, scaleY);
+
   context.strokeStyle = "rgba(241, 243, 233, 0.95)";
   context.lineWidth = 1.5;
   context.strokeRect(
@@ -2468,8 +2498,8 @@ function cameraShakeOffset(
     return { x: 0, y: 0 };
   }
 
-  if (isExperimentalUltimateId(shot.weaponId)) {
-    const definition = getExperimentalUltimate(shot.weaponId);
+  if (isExperimentalShowcaseId(shot.weaponId)) {
+    const definition = getExperimentalShowcase(shot.weaponId);
     const startsAt = clamp(
       definition.anticipationMs / shot.duration,
       0.12,
@@ -2776,8 +2806,8 @@ function segmentColor(
   style: SegmentStyle,
   weaponId: PlayableWeaponId,
 ): string {
-  if (isExperimentalUltimateId(weaponId)) {
-    return getExperimentalUltimate(weaponId).accent;
+  if (isExperimentalShowcaseId(weaponId)) {
+    return getExperimentalShowcase(weaponId).accent;
   }
   const weapon = getWeapon(weaponId);
   switch (style) {
@@ -3085,7 +3115,7 @@ function drawImpactEnvelopes(
   progress: number,
   effectLevel: EffectLevel,
 ): void {
-  if (isExperimentalUltimateId(shot.weaponId)) {
+  if (isExperimentalShowcaseId(shot.weaponId)) {
     return;
   }
   const profile = getWeaponEffectProfile(shot.weaponId);
@@ -3520,6 +3550,21 @@ function drawShot(
   model: GameModel,
   now: number,
 ): void {
+  if (isVfxLabWeaponId(shot.weaponId)) {
+    for (const segment of shot.segments) {
+      if (progress >= segment.startsAt && progress <= segment.endsAt) {
+        drawProjectile(
+          context,
+          segment,
+          shot.weaponId,
+          progress,
+          model.reducedMotion,
+          now,
+        );
+      }
+    }
+    return;
+  }
   if (isExperimentalUltimateId(shot.weaponId)) {
     drawExperimentalShot(context, shot, progress, model, now);
     return;
@@ -3985,6 +4030,7 @@ export default function ScorchedGame() {
   const shotRef = useRef<ShotVisual | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const particlePoolRef = useRef<Particle[]>([]);
+  const vfxLabResourcesRef = useRef(createVfxLabRenderResources());
   const audioRef = useRef<AudioDirector | null>(null);
   const frameRef = useRef<number | null>(null);
   const lastFrameRef = useRef(0);
@@ -4033,7 +4079,7 @@ export default function ScorchedGame() {
   const selectedWeaponDefinition = getWeapon(selectedWeapon);
   const selectedExperimentalDefinition =
     infiniteArsenal && activeTank.selectedExperimental
-      ? getExperimentalUltimate(activeTank.selectedExperimental)
+      ? getExperimentalShowcase(activeTank.selectedExperimental)
       : null;
   const selectedPlayableId: PlayableWeaponId =
     selectedExperimentalDefinition?.id ?? selectedWeapon;
@@ -4043,9 +4089,13 @@ export default function ScorchedGame() {
         shortName: selectedExperimentalDefinition.shortName,
         icon: selectedExperimentalDefinition.icon,
         accent: selectedExperimentalDefinition.accent,
-        role: "Experimental Ultimate",
+        role: isVfxLabWeaponId(selectedExperimentalDefinition.id)
+          ? "VFX Lab II prototype"
+          : "Experimental Ultimate",
         stock: "∞ showcase",
-        count: "Experimental 10",
+        count: isVfxLabWeaponId(selectedExperimentalDefinition.id)
+          ? "VFX Lab II · 10"
+          : "Ultimates · 10",
       }
     : {
         name: selectedWeaponDefinition.name,
@@ -4086,9 +4136,16 @@ export default function ScorchedGame() {
       weaponSelectorFilter === "experimental")
       ? EXPERIMENTAL_ULTIMATES
       : [];
+  const selectorVfxLab =
+    infiniteArsenal &&
+    (weaponSelectorFilter === "all" ||
+      weaponSelectorFilter === "vfx-lab-ii")
+      ? VFX_LAB_II_WEAPONS
+      : [];
   const selectorPlayableIds: readonly PlayableWeaponId[] = [
     ...selectorWeapons.map((weapon) => weapon.id),
     ...selectorExperimental.map((ultimate) => ultimate.id),
+    ...selectorVfxLab.map((weapon) => weapon.id),
   ];
 
   const refresh = useCallback(() => {
@@ -4594,11 +4651,13 @@ export default function ScorchedGame() {
 
   useEffect(() => {
     const game = gameRef.current;
+    const vfxLabResources = vfxLabResourcesRef.current;
     game.audio = loadAudioPreferences(window.localStorage);
     refresh();
     return () => {
       const audio = audioRef.current;
       audioRef.current = null;
+      releaseVfxLabRenderResources(vfxLabResources);
       void audio?.dispose().catch(() => undefined);
     };
   }, [refresh]);
@@ -4936,9 +4995,16 @@ export default function ScorchedGame() {
         weaponSelectorFilter === "experimental")
         ? EXPERIMENTAL_ULTIMATES
         : [];
+    const visibleVfxLab =
+      infiniteArsenal &&
+      (weaponSelectorFilter === "all" ||
+        weaponSelectorFilter === "vfx-lab-ii")
+        ? VFX_LAB_II_WEAPONS
+        : [];
     const visibleIds: readonly PlayableWeaponId[] = [
       ...visibleWeapons.map((weapon) => weapon.id),
       ...visibleExperimental.map((ultimate) => ultimate.id),
+      ...visibleVfxLab.map((weapon) => weapon.id),
     ];
     const focusWeapon = visibleIds.includes(selectedPlayableId)
       ? selectedPlayableId
@@ -5016,6 +5082,7 @@ export default function ScorchedGame() {
     }
 
     shotRef.current = null;
+    releaseVfxLabRenderResources(vfxLabResourcesRef.current);
     cameraModeRef.current = "auto";
     refresh();
   }, [playUiAudio, refresh, resetTransientSelectorsForTurnChange]);
@@ -5097,6 +5164,40 @@ export default function ScorchedGame() {
         cameraProgress,
         game,
       );
+      const cameraBounds = {
+        left: camera.center.x - viewport.width / (2 * camera.zoom),
+        top: camera.center.y - viewport.height / (2 * camera.zoom),
+        width: viewport.width / camera.zoom,
+        height: viewport.height / camera.zoom,
+      };
+      const impactScreen = shot
+        ? {
+            x:
+              (shot.finalPoint.x - camera.center.x) * camera.zoom +
+              viewport.width / 2 +
+              cameraOffset.x,
+            y:
+              (shot.finalPoint.y - camera.center.y) * camera.zoom +
+              viewport.height / 2 +
+              cameraOffset.y,
+          }
+        : { x: 0, y: 0 };
+      const drawLabStage = (stage: Parameters<typeof drawVfxLabStage>[0]["stage"]) => {
+        if (!shot) {
+          return;
+        }
+        drawVfxLabStage({
+          context,
+          stage,
+          shot,
+          effectLevel: game.effectLevel,
+          reducedMotion: game.reducedMotion,
+          viewport,
+          cameraBounds,
+          impactScreen,
+          resources: vfxLabResourcesRef.current,
+        });
+      };
       context.save();
       context.beginPath();
       context.rect(0, 0, viewport.width, viewport.height);
@@ -5107,6 +5208,7 @@ export default function ScorchedGame() {
       );
       context.scale(camera.zoom, camera.zoom);
       context.translate(-camera.center.x, -camera.center.y);
+      drawLabStage("behindWorld");
 
       const terrainCanvas = renderTerrain(
         game.terrain,
@@ -5120,6 +5222,7 @@ export default function ScorchedGame() {
         game.terrainDirtyRegion = null;
       }
       context.drawImage(terrainCanvas, 0, 0);
+      drawLabStage("worldUnderlay");
 
       drawTank(
         context,
@@ -5137,6 +5240,8 @@ export default function ScorchedGame() {
       if (shot) {
         const progress = cameraProgress;
         drawShot(context, shot, progress, game, now);
+        drawLabStage("worldOverlay");
+        drawLabStage("foreground");
 
         if (!shot.resolved && progress >= shot.resolvedAt) {
           shot.resolved = true;
@@ -5226,6 +5331,7 @@ export default function ScorchedGame() {
 
       drawParticles(context, particlesRef.current);
       context.restore();
+      drawLabStage("screenSpace");
       const minimapCanvas = minimapCanvasRef.current;
       if (minimapCanvas) {
         drawMinimap(
@@ -5234,6 +5340,7 @@ export default function ScorchedGame() {
           game,
           cameraRef.current,
           viewport,
+          shot,
         );
       }
       frameRef.current = requestAnimationFrame(renderFrame);
@@ -5474,7 +5581,7 @@ export default function ScorchedGame() {
   );
 
   const selectExperimentalFromSelector = useCallback(
-    (ultimateId: ExperimentalUltimateId) => {
+    (ultimateId: ExperimentalShowcaseId) => {
       const game = gameRef.current;
       if (
         !isInfiniteArsenalMode(game.mode) ||
@@ -5483,10 +5590,14 @@ export default function ScorchedGame() {
         return;
       }
       const tank = game.tanks[game.activePlayer];
-      const ultimate = getExperimentalUltimate(ultimateId);
+      const ultimate = getExperimentalShowcase(ultimateId);
       tank.selectedExperimental = ultimateId;
       game.message =
-        `${ultimate.name}: Experimental Showcase, бесконечный доступ. ` +
+        `${ultimate.name}: ${
+          isVfxLabWeaponId(ultimateId)
+            ? "VFX Lab II visual bake-off"
+            : "Experimental Showcase"
+        }, бесконечный доступ. ` +
         `${ultimate.description}`;
       playUiAudio(
         "weapon-select",
@@ -5519,7 +5630,7 @@ export default function ScorchedGame() {
       event.preventDefault();
       event.stopPropagation();
       const requestedId = currentOption.dataset.weaponId;
-      if (isExperimentalUltimateId(requestedId)) {
+      if (isExperimentalShowcaseId(requestedId)) {
         selectExperimentalFromSelector(requestedId);
       } else {
         selectWeaponFromSelector(requestedId as WeaponId);
@@ -5667,6 +5778,7 @@ export default function ScorchedGame() {
     setPrecisionControl(null);
     setCameraPanelOpen(false);
     const owner = game.activePlayer;
+    releaseVfxLabRenderResources(vfxLabResourcesRef.current);
     const tank = game.tanks[owner];
     const experimentalId = isInfiniteArsenalMode(game.mode)
       ? tank.selectedExperimental
@@ -5677,11 +5789,11 @@ export default function ScorchedGame() {
     game.tanks.forEach((player) => {
       player.shieldResponse = null;
     });
-    if (!isExperimentalUltimateId(weaponId)) {
+    if (!isExperimentalShowcaseId(weaponId)) {
       consumePlayerWeapon(tank, weaponId, game.mode);
     }
 
-    const shot = isExperimentalUltimateId(weaponId)
+    const shot = isExperimentalShowcaseId(weaponId)
       ? buildExperimentalShot(game, owner, weaponId)
       : buildShot(game, owner, weaponId);
     shotRef.current = shot;
@@ -5689,8 +5801,8 @@ export default function ScorchedGame() {
     game.phase = "firing";
     audioRef.current?.setMusicState("flight");
     game.message = `${tank.name} запускает «${
-      isExperimentalUltimateId(weaponId)
-        ? getExperimentalUltimate(weaponId).name
+      isExperimentalShowcaseId(weaponId)
+        ? getExperimentalShowcase(weaponId).name
         : getWeapon(weaponId).name
     }».`;
     refresh();
@@ -5938,7 +6050,7 @@ export default function ScorchedGame() {
       }
       game.mode = mode;
       game.message = isInfiniteArsenalMode(mode)
-        ? "Infinite Arsenal выбран: канонические 33 и отдельные Experimental 10 доступны бесконечно, магазин отключён."
+        ? "Infinite Arsenal выбран: canonical 33, Ultimates 10 и отдельная VFX Lab II · 10 доступны бесконечно; магазин отключён."
         : "Quick Demo выбран: finite ammo расходуется, между раундами работает магазин.";
       playUiAudio("mode-select");
       refresh();
@@ -5988,7 +6100,7 @@ export default function ScorchedGame() {
       cameraRef.current.zoom,
     );
     game.message = isInfiniteArsenalMode(game.mode)
-      ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите каноническое оружие или Experimental Ultimate.`
+      ? `${game.tanks[game.activePlayer].name}: Infinite Arsenal — выберите canonical weapon, Ultimate или VFX Lab II prototype.`
       : `${game.tanks[game.activePlayer].name}: выберите оружие и сделайте первый выстрел.`;
     refresh();
     void audioActivation.then((audio) => {
@@ -6209,6 +6321,7 @@ export default function ScorchedGame() {
     shotRef.current = null;
     particlesRef.current = [];
     particlePoolRef.current = [];
+    releaseVfxLabRenderResources(vfxLabResourcesRef.current);
     terrainCacheRef.current = null;
     setArsenalFilter("all");
     setWeaponSelectorFilter("all");
@@ -7249,12 +7362,12 @@ export default function ScorchedGame() {
               <h2 id="weapon-selector-title">Выберите оружие</h2>
               <span className={styles.weaponDialogInventoryHint}>
                 {infiniteArsenal
-                  ? "33 без лимита + 10 showcase · листайте ↓"
+                  ? "33 без лимита + 20 showcase в двух группах · листайте ↓"
                   : "33 оружия · по 1 заряду · листайте ↓"}
               </span>
               <p>
                 {infiniteArsenal
-                  ? "Канонические 33 + отдельные Experimental 10 · стрелки и Enter"
+                  ? "Canonical 33 + Ultimates 10 + VFX Lab II · 10 · стрелки и Enter"
                   : "Все 33 позиции · стрелки для навигации · Enter для выбора"}
               </p>
             </div>
@@ -7295,7 +7408,9 @@ export default function ScorchedGame() {
           >
             {WEAPON_SELECTOR_FILTERS.filter(
               (filter) =>
-                filter.id !== "experimental" || infiniteArsenal,
+                (filter.id !== "experimental" &&
+                  filter.id !== "vfx-lab-ii") ||
+                infiniteArsenal,
             ).map((filter) => (
               <button
                 type="button"
@@ -7451,6 +7566,69 @@ export default function ScorchedGame() {
                       </span>
                       <span className={styles.weaponOptionStatus}>
                         <strong>{selected ? "Выбрано" : "Showcase"}</strong>
+                        <span>∞</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </>
+            )}
+            {selectorVfxLab.length > 0 && (
+              <>
+                <div
+                  className={`${styles.experimentalGroupHeader} ${styles.vfxLabGroupHeader}`}
+                  role="presentation"
+                >
+                  <strong>VFX Lab II · 10</strong>
+                  <span>
+                    Visual bake-off · малый mechanic footprint · выбор и
+                    cleanup только после review владельца
+                  </span>
+                </div>
+                {selectorVfxLab.map((weapon) => {
+                  const selected =
+                    activeTank.selectedExperimental === weapon.id;
+                  return (
+                    <button
+                      type="button"
+                      role="option"
+                      key={weapon.id}
+                      ref={(node) => {
+                        weaponOptionRefs.current[weapon.id] = node;
+                      }}
+                      data-weapon-id={weapon.id}
+                      className={`${styles.weaponOption} ${
+                        styles.experimentalOption
+                      } ${styles.vfxLabOption} ${
+                        selected ? styles.weaponOptionSelected : ""
+                      }`}
+                      style={weaponStyle(weapon.accent)}
+                      aria-selected={selected}
+                      aria-label={`${weapon.name}, VFX Lab II prototype, ${
+                        selected ? "выбрано" : "бесконечный showcase-доступ"
+                      }, механическая зона ${weapon.footprint.mechanicalRadius}`}
+                      title={`${weapon.description} Локальная mechanical zone: ${weapon.footprint.mechanicalRadius}.`}
+                      onClick={() =>
+                        selectExperimentalFromSelector(weapon.id)
+                      }
+                    >
+                      <span className={styles.weaponOptionLead}>
+                        <span
+                          className={styles.weaponOptionIcon}
+                          aria-hidden="true"
+                        >
+                          {weapon.icon}
+                        </span>
+                        <span className={styles.weaponOptionTitle}>
+                          <strong>{weapon.shortName}</strong>
+                          <span>VFX Lab II · локальный impact</span>
+                        </span>
+                      </span>
+                      <span className={styles.weaponOptionDescription}>
+                        {weapon.description}
+                      </span>
+                      <span className={styles.weaponOptionStatus}>
+                        <strong>{selected ? "Выбрано" : "Bake-off"}</strong>
                         <span>∞</span>
                       </span>
                     </button>
@@ -7626,7 +7804,7 @@ export default function ScorchedGame() {
                 <strong>Infinite Arsenal</strong>
                 <span>
                   Неканонический showcase: canonical 33 и отдельные
-                  Experimental 10 бесконечны, без магазина.
+                  Ultimates 10 + VFX Lab II · 10 бесконечны, без магазина.
                 </span>
               </button>
             </div>
@@ -7849,7 +8027,9 @@ export default function ScorchedGame() {
               aria-label="Фильтр арсенала"
             >
               {WEAPON_SELECTOR_FILTERS.filter(
-                (filter) => filter.id !== "experimental",
+                (filter) =>
+                  filter.id !== "experimental" &&
+                  filter.id !== "vfx-lab-ii",
               ).map((filter) => (
                 <button
                   type="button"

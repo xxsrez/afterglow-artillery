@@ -1,7 +1,7 @@
 import {
-  EXPERIMENTAL_ULTIMATES,
+  EXPERIMENTAL_SHOWCASE,
   WEAPONS,
-  type ExperimentalUltimateId,
+  type ExperimentalShowcaseId,
   type ShieldEvent,
   type ShieldId,
   type WeaponFamily,
@@ -14,7 +14,7 @@ import {
   type AudioSampleId,
 } from "./audio-assets";
 
-export type PlayableSoundId = WeaponId | ExperimentalUltimateId;
+export type PlayableSoundId = WeaponId | ExperimentalShowcaseId;
 
 export interface AudioPreferences {
   readonly musicEnabled: boolean;
@@ -518,7 +518,7 @@ function archetypeForFamily(family: WeaponFamily): SoundArchetype {
 }
 
 function experimentalArchetypeFor(
-  weaponId: ExperimentalUltimateId,
+  weaponId: ExperimentalShowcaseId,
 ): SoundArchetype {
   switch (weaponId) {
     case "heliosSpire":
@@ -536,7 +536,20 @@ function experimentalArchetypeFor(
       return "terrain-cut";
     case "gravityCathedral":
     case "novaRing":
+    case "behindTheSky":
+    case "blackPanel":
+    case "filmBurnZero":
+    case "shadowJudgment":
       return "blast";
+    case "inkTide":
+    case "invertedOcean":
+      return "fire";
+    case "thunderWeave":
+    case "neonLeviathan":
+      return "laser";
+    case "pixelUndertow":
+    case "clockworkEclipse":
+      return "mechanical";
   }
 }
 
@@ -705,7 +718,7 @@ function canonicalSoundProfile(
 }
 
 function experimentalSoundProfile(
-  definition: (typeof EXPERIMENTAL_ULTIMATES)[number],
+  definition: (typeof EXPERIMENTAL_SHOWCASE)[number],
   index: number,
 ): SoundProfile {
   const [low, middle, high] = definition.audioMotif;
@@ -754,12 +767,12 @@ export const CANONICAL_SOUND_PROFILES = Object.freeze(
 
 export const EXPERIMENTAL_SOUND_PROFILES = Object.freeze(
   Object.fromEntries(
-    EXPERIMENTAL_ULTIMATES.map((ultimate, index) => [
+    EXPERIMENTAL_SHOWCASE.map((ultimate, index) => [
       ultimate.id,
       experimentalSoundProfile(ultimate, index),
     ]),
   ),
-) as Readonly<Record<ExperimentalUltimateId, SoundProfile>>;
+) as Readonly<Record<ExperimentalShowcaseId, SoundProfile>>;
 
 export const SOUND_PROFILES: Readonly<
   Record<PlayableSoundId, SoundProfile>

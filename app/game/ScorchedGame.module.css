@@ -838,6 +838,19 @@
     rgba(63, 112, 143, 0.06);
 }
 
+.vfxLabGroupHeader {
+  border-color: color-mix(in srgb, #57d9ff 52%, transparent);
+  background:
+    linear-gradient(100deg, rgba(87, 217, 255, 0.13), rgba(180, 108, 255, 0.08)),
+    rgba(5, 12, 16, 0.82);
+}
+
+.vfxLabOption {
+  background:
+    linear-gradient(145deg, rgba(87, 217, 255, 0.07), transparent 52%),
+    var(--panel);
+}
+
 .weaponOption {
   display: grid;
   min-width: 0;

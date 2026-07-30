@@ -1,7 +1,7 @@
 # Архитектура
 
 - **Статус:** реализовано для vertical slice; расширение требует профилирования
-- **Обновлено:** 2026-07-28
+- **Обновлено:** 2026-07-30
 
 ## 1. Движущие ограничения
 
@@ -107,6 +107,18 @@ Particle subsystem также отделён от React adapter. Все семе
 active caps. Интерполяция projectile trails в горячем цикле пишет координаты
 в переиспользуемый scratch-объект вместо создания временного `Vector2` для
 каждого sample.
+
+VFX Lab II вводит независимый typed presentation registry поверх общего
+Experimental Showcase registry. Domain resolver в
+`lib/game/experimental-vfx-lab-ii.ts` возвращает local-impact event log и
+финальное состояние; registry в `lib/game/experimental-presentations.ts`
+задаёт только draw stages, keyframes, bounds, signature primitives,
+accessibility и бюджеты качества. Canvas adapter в
+`app/game/vfx-lab-ii-presentation.ts` исполняет пять слоёв вокруг
+terrain/tanks, но не может менять mechanic points, damage или material.
+Scene snapshot принадлежит одному shot и освобождается при завершении или
+размонтировании; небольшой процедурный cel atlas хранится в bounded
+module-cache и переиспользуется между shot.
 
 ### UI
 
@@ -232,6 +244,10 @@ damage profile, allowed guidance, event choreography id и balance profile.
 - object pools для часто создаваемых presentation objects;
 - canonical active-particle cap `320` не смешивается с отдельными
   Experimental caps `600 desktop / 250 phone / 80 Reduced`;
+- VFX Lab II Full ограничен одним offscreen canvas/capture, `518400` pixels,
+  тремя composite passes и семью voices на эффект; Reduced не делает capture,
+  не использует offscreen pixels, particles, distortion, strong parallax или
+  shake;
 - trail sampling не создаёт временный объект на каждую точку каждого кадра;
 - adaptive resolution/effect density без изменения logical world.
 
@@ -274,10 +290,13 @@ Vertical slice — клиентская игра в Sites-compatible web bundle:
 8. touch- и listening-flow остаются целевой проверкой на физическом телефоне;
 9. performance trace на reference device остаётся обязательным до заявлений о
    производительности на физическом устройстве.
+10. VFX Lab II сохраняет 10 уникальных presentation classes, полный набор из
+    пяти draw stages, Full climax coverage не меньше 70%, Missile-sized
+    mechanics и одинаковый outcome всех quality tiers.
 
-Пункты 1–5 и 7 проверяются автоматикой, а пункты 6–7 — также browser smoke.
-Последние два нельзя считать подтверждёнными без реального устройства,
-прослушивания и trace.
+Пункты 1–5, 7 и 10 проверяются автоматикой, а пункты 6–7 и 10 — также browser
+smoke. Physical touch/listening и device trace нельзя считать подтверждёнными
+без реального устройства и прослушивания.
 
 ## 11. Риски
 

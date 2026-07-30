@@ -1,7 +1,7 @@
 # Реализованный Quick Demo
 
 - **Статус:** реализовано
-- **Обновлено:** 2026-07-29
+- **Обновлено:** 2026-07-30
 - **Область:** текущая браузерная версия с полным demo arsenal, не полный Classic
 
 ## Игровой цикл
@@ -103,6 +103,35 @@ Presentation seed отделён от mechanics seed.
 
 Representative local/production flow описан в
 [effect envelope verification](verification/effect-envelope-showcase.md).
+
+## VFX Lab II
+
+Infinite Arsenal теперь показывает 20 Experimental items двумя отдельными
+группами: сохранённые без изменения 10 Ultimates и 10 новых VFX Lab II.
+Общий `experimental-showcase` registry даёт selector и audio один набор ID,
+но механика и presentation разделены:
+
+- `experimental-vfx-lab-ii.ts` детерминированно вырезает только локальный
+  radial crater радиусом `18–30`, рассчитывает local damage и возвращает
+  anticipation/deployment/culmination/aftermath event log;
+- `experimental-presentations.ts` хранит для всех 20 items типизированные
+  presentation classes, stages, keyframes, bounds, accessibility и бюджеты,
+  не импортируя механическую стратегию;
+- `vfx-lab-ii-presentation.ts` рисует 10 новых классов между слоями мира:
+  cel flipbook, panel/halftone, ink matte, seeded lightning, burn mask,
+  snapshot tiles, оригинальный vector creature, dynamic shadows, gear rig и
+  inverted water/caustics;
+- scene capture принадлежит текущему shot и освобождается после него;
+  процедурный cel atlas переиспользуется из bounded module-cache, а minimap
+  не повторяет spectacle и показывает только локальный mechanic cue.
+
+`tests/vfx-lab-ii.test.ts` проверяет exact registry counts, уникальные классы,
+все пять draw stages, Full coverage, budgets, accessibility, seeded mechanics
+и одинаковый outcome quality tiers. Один Chromium mobile smoke последовательно
+выбирает и проигрывает все десять прототипов с выключенными music/SFX, снимает
+три keyframe и проверяет, что число canvas не растёт. Воспроизводимая gallery,
+host-browser telemetry и ограничения проверки записаны в
+[VFX Lab II verification](verification/vfx-lab-ii.md).
 
 ## Shield showcase
 
@@ -219,7 +248,7 @@ ammo policy.
   scratch вместо тысяч краткоживущих объектов;
 - отдельный audio module после пользовательского действия проигрывает локальный
   CC0 action-chiptune и смешивает CC0 one-shot layers с procedural Web Audio
-  signatures; все `33 + 10` items имеют typed profile, semantic archetype и
+  signatures; все `33 + 20` items имеют typed profile, semantic archetype и
   impact scale;
   Apple mobile WebKit получает playback AudioSession, а без этого API —
   media-route fallback; desktop Safari сохраняет автоматическую AudioSession и

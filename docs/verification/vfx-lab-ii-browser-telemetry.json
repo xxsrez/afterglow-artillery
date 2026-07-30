@@ -1,0 +1,25 @@
+{
+  "capturedAt": "2026-07-30T09:46:52.601Z",
+  "environment": "Playwright Chromium, macOS host, 960x540 CSS viewport, Full effects",
+  "audio": "Music and SFX muted before match start",
+  "prototypes": [
+    "behindTheSky",
+    "blackPanel",
+    "inkTide",
+    "thunderWeave",
+    "filmBurnZero",
+    "pixelUndertow",
+    "neonLeviathan",
+    "shadowJudgment",
+    "clockworkEclipse",
+    "invertedOcean"
+  ],
+  "sampleCount": 4112,
+  "p50FrameMs": 8.300000000001091,
+  "p95FrameMs": 9.300000000001091,
+  "longFramesOver50Ms": 0,
+  "caveats": [
+    "Browser-host measurement only; not a physical-phone trace.",
+    "The sampled browser session includes setup, selection and screenshot capture pauses."
+  ]
+}

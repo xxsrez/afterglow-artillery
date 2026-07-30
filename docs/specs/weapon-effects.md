@@ -1,7 +1,7 @@
 # Спецификация эффектов оружия
 
 - **Статус:** presentation-контракт и шкала envelopes полного Quick Demo arsenal приняты
-- **Обновлено:** 2026-07-29
+- **Обновлено:** 2026-07-30
 - **Область:** VFX, camera response, звук и читаемость оружия
 
 ## 1. Цель
@@ -225,6 +225,38 @@ final terrain/tank state. Presentation только читает результ�
 shake/glow. Основная механика завершается не позднее пяти секунд; pooled
 particles могут продолжить неблокирующий decorative aftermath.
 
+### VFX Lab II
+
+Вторая группа Infinite Arsenal добавляет ещё ровно 10 неканонических
+прототипов: Изнанка неба, Чёрная панель, Чернильный прилив, Громовая ткань,
+Киноплёнка-0, Пиксельный отлив, Неоновый левиафан, Суд теней, Механическое
+затмение и Океан вверх дном. Они проверяют не новые классы урона, а десять
+разных способов построить доминирующую экранную композицию:
+
+- background flipbook/parallax, graphic-novel compositor и organic alpha
+  matte;
+- procedural vector network, burn dissolve и scene-snapshot tiles;
+- оригинальный vector character, dynamic silhouette lighting,
+  hierarchical gear rig и atmospheric caustics.
+
+У всех прототипов чистый resolver создаёт только один локальный crater/damage
+footprint радиусом `18–30`, то есть не больше Missile-sized `34`.
+Presentation registry не содержит strategy или mechanical radius и читает
+готовый event log. Его пять draw stages — `behindWorld`, `worldUnderlay`,
+`worldOverlay`, `foreground`, `screenSpace` — могут занять не меньше 70%
+viewport в кульминации Full, но minimap показывает только mechanical contour.
+
+Anticipation, climax и aftermath имеют отдельные keyframe telemetry. Частицы
+опциональны и не являются signature primitive; в Reduced их budget равен
+нулю. Full/Balanced/Reduced дают одинаковые terrain/tank outcomes. Reduced
+также отключает scene capture, offscreen compositing, distortion, сильный
+parallax и shake, сохраняя локальный контур и порядок событий.
+
+Графика VFX Lab II полностью процедурная и создана внутри проекта: cel atlas,
+matte, tiles, vector creature, shadows, gears и caustics строятся кодом. Она
+не импортирует artwork, sprite, текст, интерфейс или конфигурацию оригинальной
+игры.
+
 ## 6. Карточка производства оружия
 
 Перед реализацией эффекта заполняется короткий brief:
@@ -291,6 +323,10 @@ particles могут продолжить неблокирующий decorative 
 - для Experimental Ultimates — отдельные bounded budgets и caps
   `600 desktop / 250 phone / 80 Reduced`, object pool и переиспользуемые
   offscreen Canvas primitives;
+- для VFX Lab II registry дополнительно ограничивает каждый эффект максимум
+  одним offscreen canvas/capture, `518400` offscreen pixels, тремя composite
+  passes, тремя flipbook layers, семью audio voices и `1800 ms` blocking
+  presentation; Reduced использует ноль offscreen pixels/captures и частиц;
 - Canvas 2D остаётся принятым renderer Quick Demo; переход к WebGL допускается
   только после измерения ограничения и отдельного ADR;
 - пауза симуляции и корректное восстановление presentation после возвращения
@@ -331,7 +367,10 @@ particles могут продолжить неблокирующий decorative 
   touch-проверку на физическом устройстве.
 
 Experimental Showcase дополнительно принимается, когда registry содержит
-ровно 10 идентификаторов вне canonical 33, каждый seed воспроизводит одинаковые
-event log/final state, все десять последовательно проходят browser smoke, а
-недоступные physical-device/performance проверки явно вынесены как gap, не
-подменены desktop-эмуляцией.
+ровно 20 идентификаторов вне canonical 33, разделённых на две явные группы по
+10. Каждый seed воспроизводит одинаковые event log/final state, все элементы
+каждой группы последовательно проходят browser smoke, а недоступные
+physical-device/performance проверки явно вынесены как gap, не подменены
+desktop-эмуляцией. Для VFX Lab II browser capture обязан сохранить
+anticipation/climax/aftermath каждого прототипа, frame telemetry и отсутствие
+роста числа canvas после последовательного просмотра.

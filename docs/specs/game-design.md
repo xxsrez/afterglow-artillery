@@ -1,7 +1,7 @@
 # Спецификация игрового дизайна
 
 - **Статус:** ruleset Quick Demo принят; полный Classic остаётся целью fidelity
-- **Обновлено:** 2026-07-29
+- **Обновлено:** 2026-07-30
 - **Область:** Quick Demo с полным arsenal и путь к каноническому ruleset
 
 ## 1. Продуктовая формула
@@ -86,6 +86,10 @@ Classic, где default начинается с бесконечной Baby Miss
 - отдельная группа `Experimental Ultimates` содержит ровно 10 собственных
   showcase-механик; они не входят в canonical 33, Quick Demo inventory,
   магазин, payout или экономику;
+- вторая отдельная группа `VFX Lab II` содержит ещё ровно 10 неканонических
+  прототипов presentation. Их локальный radial outcome не превосходит
+  Missile-sized footprint `34`, а полноэкранная хореография остаётся
+  декоративной;
 - selector и current-weapon control показывают `∞`, не фиктивное большое
   число;
 - player-owned выбор оружия, угол и сила остаются независимыми;
@@ -236,7 +240,8 @@ Classic, где default начинается с бесконечной Baby Miss
    подменять характеристики предмета с тем же идентификатором.
 6. Для canonical 33 Infinite Arsenal меняет только явную ammo/interround
    policy; mechanical outcome одного seeded shot совпадает с Quick Demo.
-   Experimental 10 являются отдельным явно неканоническим Showcase-слоем.
+   Experimental 20 являются двумя отдельными явно неканоническими
+   Showcase-группами по 10: исходные Ultimates и VFX Lab II.
 7. Release 0.1 применяет неканоническую семейную шкалу radius из
    [ADR 0004](../decisions/0004-quick-demo-effect-scale.md): `1.0–1.8×` к
    прежним demo values. Center damage, falloff, payload count, price и bundle
@@ -365,8 +370,9 @@ Desktop использует тот же layout с мышью, колесом и
 - полный каталог из 33 weapons с одним стартовым finite shot каждого;
 - пять shield families и None с независимым player-owned состоянием в
   Infinite Arsenal showcase;
-- отдельные Experimental 10 с typed registry, seeded event log и независимым
-  player-owned выбором только в Infinite Arsenal;
+- отдельные Experimental 20 с typed registry, seeded event log и независимым
+  player-owned выбором только в Infinite Arsenal: 10 исходных Ultimates и
+  10 прототипов VFX Lab II;
 - канонические price, bundle size, arms level и inventory cap;
 - детерминированные provisional mechanics для неизвестных формул;
 - явные mechanical/readable/spectacle profiles всех 33 weapons;

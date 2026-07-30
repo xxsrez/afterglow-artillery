@@ -1,9 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const mobilePort = Number(process.env.PLAYWRIGHT_PORT ?? "41921");
+const mobileBaseUrl = `http://127.0.0.1:${mobilePort}`;
+
 export default defineConfig({
   testDir: "./tests/mobile",
   testIgnore: process.env.CI ? "**/mobile-visual.spec.ts" : undefined,
-  outputDir: "test-results/mobile",
+  outputDir:
+    process.env.PLAYWRIGHT_OUTPUT_DIR ?? "test-results/mobile",
   snapshotPathTemplate:
     "{testDir}/__snapshots__/{projectName}/{testFilePath}/{arg}{ext}",
   fullyParallel: false,
@@ -13,7 +17,7 @@ export default defineConfig({
     ? [["line"], ["html", { open: "never", outputFolder: "playwright-report" }]]
     : "line",
   use: {
-    baseURL: "http://127.0.0.1:41921",
+    baseURL: mobileBaseUrl,
     colorScheme: "dark",
     locale: "ru-RU",
     screenshot: "only-on-failure",
@@ -44,8 +48,8 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "npm run build && npm run start -- --host 127.0.0.1 --port 41921",
-    url: "http://127.0.0.1:41921",
+      `npm run build && npm run start -- --host 127.0.0.1 --port ${mobilePort}`,
+    url: mobileBaseUrl,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
   },
